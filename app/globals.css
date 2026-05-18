@@ -1,0 +1,26 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+html, body { height: 100%; }
+body {
+  background: #E8E1D2;
+  color: #1A1714;
+  background-image: radial-gradient(circle at 1px 1px, rgba(26,23,20,0.035) 1px, transparent 0);
+  background-size: 22px 22px;
+}
+
+/* Eyebrow micro-label */
+.eyebrow {
+  font-size: 10.5px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: #8A8278;
+  font-weight: 500;
+}
+
+/* Tabular numbers for stats */
+.tabular { font-variant-numeric: tabular-nums; }
+
+@keyframes blink { 50% { opacity: 0; } }
+.caret { animation: blink 1s infinite step-end; }

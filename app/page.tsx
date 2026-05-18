@@ -1,0 +1,853 @@
+"use client";
+
+import { useEffect, useMemo, useRef, useState } from "react";
+import { LANGUAGES, LEVELS, type LanguageCode, type LevelCode } from "@/lib/languages";
+
+type WindowPhrase = {
+  phrase_index: number;
+  source_text: string;
+  target_text: string;
+  new_words: string[];
+};
+
+type StateResponse = {
+  currentN: number;
+  learnedWordCount: number;
+  targetWordCount: number;
+  window: WindowPhrase[];
+};
+
+type Stage =
+  | { kind: "picker" }
+  | { kind: "loading" }
+  | { kind: "ready"; state: StateResponse }
+  | {
+      kind: "repeating";
+      state: StateResponse;
+      index: number;
+      mistake: { wrong: string; correct: string } | null;
+      wrongByPhrase: Record<number, string[]>;
+    }
+  | { kind: "generating"; state: StateResponse }
+  | {
+      kind: "new-phrase";
+      state: StateResponse;
+      phrase: WindowPhrase;
+      mistake: { wrong: string; correct: string } | null;
+      wrongAttempts: string[];
+    }
+  | { kind: "done"; state: StateResponse; lastPhrase: WindowPhrase };
+
+function normalize(text: string): string {
+  return text
+    .toLowerCase()
+    .trim()
+    .replace(/[.,!?;:"'()\[\]{}«»¿¡]/g, "")
+    .replace(/\s+/g, " ");
+}
+
+/* ───────────── Shared chrome ───────────── */
+
+function Mark() {
+  return (
+    <svg width="26" height="26" viewBox="0 0 26 26" fill="none" aria-hidden="true">
+      <circle cx="13" cy="13" r="12" stroke="#1A1714" strokeWidth="1" />
+      <path d="M7 10 Q 13 4, 19 10" stroke="oklch(0.58 0.13 38)" strokeWidth="1.3" fill="none" strokeLinecap="round" />
+      <path d="M7 16 Q 13 22, 19 16" stroke="#1A1714" strokeWidth="1.3" fill="none" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+function Masthead({
+  sessionInfo,
+  onChange,
+}: {
+  sessionInfo?: { pair: string; learned: number; target: number; phraseN: number };
+  onChange?: () => void;
+}) {
+  return (
+    <div className="flex items-center justify-between px-9 py-5 border-b border-rule">
+      <div className="flex items-center gap-3.5">
+        <Mark />
+        <div className="flex items-baseline gap-2.5">
+          <span className="font-serif text-[22px] leading-none text-ink">Phrase Trainer</span>
+        </div>
+      </div>
+      {sessionInfo && (
+        <div className="flex items-center gap-6">
+          <div className="text-right">
+            <div className="eyebrow">{sessionInfo.pair}</div>
+            <div className="text-[12.5px] text-ink-2 mt-[3px] tabular">
+              <span className="text-ink font-medium">{sessionInfo.learned.toLocaleString()}</span>
+              <span className="text-ink-3"> / {sessionInfo.target.toLocaleString()} words</span>
+              <span className="text-ink-3"> · phrase #{sessionInfo.phraseN}</span>
+            </div>
+          </div>
+          {onChange && (
+            <button
+              onClick={onChange}
+              className="inline-flex items-center border border-rule bg-transparent text-ink-2 text-[11.5px] font-medium px-3 py-[7px] rounded-full hover:text-ink hover:border-ink-3 transition-colors"
+            >
+              Change
+              <svg width="10" height="10" viewBox="0 0 10 10" fill="none" className="ml-1.5">
+                <path d="M3 1.5L6.5 5L3 8.5" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
+              </svg>
+            </button>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function Footer({ left, right }: { left?: React.ReactNode; right?: React.ReactNode }) {
+  return (
+    <div className="mt-auto flex items-center justify-between px-9 py-3.5 border-t border-rule text-[11px] text-ink-3">
+      <div className="flex gap-4 items-center">{left}</div>
+      <div className="flex gap-4 items-center">{right}</div>
+    </div>
+  );
+}
+
+function Kbd({ children }: { children: React.ReactNode }) {
+  return (
+    <span className="font-mono inline-flex items-center justify-center min-w-[18px] h-[18px] px-1.5 border border-rule border-b-2 rounded bg-paper text-[10px] text-ink-2 leading-none">
+      {children}
+    </span>
+  );
+}
+
+const PRIMARY_BTN =
+  "inline-flex items-center justify-center gap-2.5 bg-ink text-paper border border-ink rounded-full px-7 py-3.5 text-sm font-medium cursor-pointer shadow-[0_1px_0_rgba(255,255,255,0.4)_inset,0_6px_16px_-8px_rgba(26,23,20,0.5)] hover:bg-ink-2 transition-colors disabled:opacity-40 disabled:cursor-not-allowed";
+
+const INPUT_WRAP =
+  "flex items-center gap-2.5 bg-paper border border-ink rounded-xl px-4 py-3.5 shadow-[0_0_0_4px_rgba(26,23,20,0.06)] focus-within:border-ink";
+
+function ArrowRight() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+      <path d="M2 7H12 M8 3L12 7L8 11" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+/* ───────────── Main component ───────────── */
+
+export default function Home() {
+  const [sourceLang, setSourceLang] = useState<LanguageCode>("english");
+  const [targetLang, setTargetLang] = useState<LanguageCode>("tagalog");
+  const [level, setLevel] = useState<LevelCode>("A1");
+  const [stage, setStage] = useState<Stage>({ kind: "picker" });
+  const [input, setInput] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    inputRef.current?.focus();
+  }, [stage]);
+
+  async function loadState() {
+    setError(null);
+    setStage({ kind: "loading" });
+    try {
+      const res = await fetch("/api/state", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ sourceLang, targetLang, level }),
+      });
+      if (!res.ok) throw new Error(await res.text());
+      const data = (await res.json()) as StateResponse;
+      setStage({ kind: "ready", state: data });
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to load state");
+      setStage({ kind: "picker" });
+    }
+  }
+
+  async function startSession() {
+    if (sourceLang === targetLang) {
+      setError("Pick two different languages.");
+      return;
+    }
+    await loadState();
+  }
+
+  function beginSession() {
+    if (stage.kind !== "ready") return;
+    if (stage.state.window.length === 0) {
+      requestNewPhrase(stage.state);
+    } else {
+      setStage({
+        kind: "repeating",
+        state: stage.state,
+        index: 0,
+        mistake: null,
+        wrongByPhrase: {},
+      });
+      setInput("");
+    }
+  }
+
+  async function requestNewPhrase(state: StateResponse) {
+    setStage({ kind: "generating", state });
+    setError(null);
+    try {
+      const res = await fetch("/api/next-phrase", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ sourceLang, targetLang, level }),
+      });
+      if (!res.ok) {
+        const data = (await res.json().catch(() => ({}))) as { error?: string };
+        throw new Error(data.error ?? "Failed to fetch new phrase");
+      }
+      const { phrase } = (await res.json()) as { phrase: WindowPhrase };
+      setStage({
+        kind: "new-phrase",
+        state,
+        phrase,
+        mistake: null,
+        wrongAttempts: [],
+      });
+      setInput("");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed");
+      setStage({ kind: "ready", state });
+    }
+  }
+
+  function submitRepetition() {
+    if (stage.kind !== "repeating") return;
+    if (stage.mistake) {
+      if (normalize(input) === normalize(stage.mistake.correct)) {
+        setStage({ ...stage, index: 0, mistake: null });
+        setInput("");
+      } else {
+        const phraseIdx = stage.state.window[stage.index].phrase_index;
+        const prev = stage.wrongByPhrase[phraseIdx] ?? [];
+        setStage({
+          ...stage,
+          mistake: { wrong: input, correct: stage.mistake.correct },
+          wrongByPhrase: { ...stage.wrongByPhrase, [phraseIdx]: [...prev, input] },
+        });
+        setInput("");
+      }
+      return;
+    }
+    const current = stage.state.window[stage.index];
+    if (normalize(input) === normalize(current.target_text)) {
+      const nextIndex = stage.index + 1;
+      setInput("");
+      if (nextIndex >= stage.state.window.length) {
+        requestNewPhrase(stage.state);
+      } else {
+        setStage({ ...stage, index: nextIndex, mistake: null });
+      }
+    } else {
+      const prev = stage.wrongByPhrase[current.phrase_index] ?? [];
+      setStage({
+        ...stage,
+        mistake: { wrong: input, correct: current.target_text },
+        wrongByPhrase: { ...stage.wrongByPhrase, [current.phrase_index]: [...prev, input] },
+      });
+      setInput("");
+    }
+  }
+
+  function submitNewPhrase() {
+    if (stage.kind !== "new-phrase") return;
+    const correct = stage.phrase.target_text;
+    if (stage.mistake) {
+      if (normalize(input) === normalize(correct)) {
+        setStage({ kind: "done", state: stage.state, lastPhrase: stage.phrase });
+        setInput("");
+      } else {
+        setStage({
+          ...stage,
+          mistake: { wrong: input, correct },
+          wrongAttempts: [...stage.wrongAttempts, input],
+        });
+        setInput("");
+      }
+      return;
+    }
+    if (normalize(input) === normalize(correct)) {
+      setStage({ kind: "done", state: stage.state, lastPhrase: stage.phrase });
+      setInput("");
+    } else {
+      setStage({
+        ...stage,
+        mistake: { wrong: input, correct },
+        wrongAttempts: [...stage.wrongAttempts, input],
+      });
+      setInput("");
+    }
+  }
+
+  function reset() {
+    setStage({ kind: "picker" });
+    setError(null);
+    setInput("");
+  }
+
+  const sourceLabel = useMemo(() => LANGUAGES.find((l) => l.code === sourceLang)?.label, [sourceLang]);
+  const targetLabel = useMemo(() => LANGUAGES.find((l) => l.code === targetLang)?.label, [targetLang]);
+
+  const sessionInfo = (s: StateResponse) => ({
+    pair: `${sourceLabel} → ${targetLabel} · ${level}`,
+    learned: s.learnedWordCount,
+    target: s.targetWordCount,
+    phraseN: s.currentN,
+  });
+
+  /* ───────────── PICKER ───────────── */
+  if (stage.kind === "picker") {
+    return (
+      <Page>
+        <Masthead />
+        <div className="flex-1 grid grid-cols-1 lg:grid-cols-[1.15fr_1fr]">
+          {/* Editorial hero */}
+          <div className="px-10 lg:px-14 py-14 flex flex-col justify-between lg:border-r border-rule">
+            <div>
+              <div className="eyebrow mb-4">Begin</div>
+              <h1 className="font-serif text-[56px] md:text-[64px] leading-[1.02] tracking-[-0.02em] m-0">
+                Learn a language,
+                <br />
+                <span className="italic text-terracotta">one phrase</span> at a time.
+              </h1>
+              <p className="mt-6 text-[14.5px] leading-[1.6] text-ink-2 max-w-[380px]">
+                Two to five words. Repeat the window of phrases you already know, then earn the next one. A single mistake resets the window — so type carefully.
+              </p>
+            </div>
+            <div className="flex gap-7 pt-6">
+              <Stat n="2–5" l="Words per phrase" />
+              <Stat n="20" l="Window size" />
+              <Stat n="5" l="Languages" />
+            </div>
+          </div>
+
+          {/* Form */}
+          <div className="px-10 lg:px-12 py-11 flex flex-col justify-center">
+            <FieldRow label="I speak">
+              <SelectField value={sourceLang} onChange={(v) => setSourceLang(v as LanguageCode)} options={LANGUAGES} />
+            </FieldRow>
+            <FieldRow label="I want to learn">
+              <SelectField value={targetLang} onChange={(v) => setTargetLang(v as LanguageCode)} options={LANGUAGES} accent />
+            </FieldRow>
+            <FieldRow label="Level" last>
+              <LevelStrip active={level} onPick={setLevel} />
+            </FieldRow>
+
+            {error && <p className="text-bad text-sm mt-4">{error}</p>}
+
+            <button onClick={startSession} className={`${PRIMARY_BTN} mt-7 w-full`}>
+              Continue
+              <ArrowRight />
+            </button>
+
+            <p className="mt-3.5 text-[11.5px] text-ink-3 text-center">
+              Anonymous · your progress is saved in this browser.
+            </p>
+          </div>
+        </div>
+        <Footer
+          left={<span>A quiet way to learn — phrase by phrase.</span>}
+          right={
+            <>
+              <span>Press</span>
+              <Kbd>↵</Kbd>
+              <span>to continue</span>
+            </>
+          }
+        />
+      </Page>
+    );
+  }
+
+  /* ───────────── LOADING ───────────── */
+  if (stage.kind === "loading" || stage.kind === "generating") {
+    return (
+      <Page>
+        <Masthead sessionInfo={undefined} />
+        <div className="flex-1 grid place-items-center px-9">
+          <div className="text-center">
+            <div className="eyebrow text-terracotta">{stage.kind === "loading" ? "Loading" : "Generating"}</div>
+            <p className="font-serif text-[36px] mt-3 leading-tight">
+              {stage.kind === "loading" ? "Reaching for your phrases…" : "Writing a new phrase for you…"}
+            </p>
+            <div className="mt-6 flex justify-center gap-1.5">
+              {[0, 1, 2].map((i) => (
+                <span
+                  key={i}
+                  className="w-1.5 h-1.5 rounded-full bg-ink-3"
+                  style={{ animation: `blink 1.4s infinite ${i * 0.2}s` }}
+                />
+              ))}
+            </div>
+          </div>
+        </div>
+      </Page>
+    );
+  }
+
+  /* ───────────── READY ───────────── */
+  if (stage.kind === "ready") {
+    const s = stage.state;
+    const windowLen = s.window.length;
+    return (
+      <Page>
+        <Masthead sessionInfo={sessionInfo(s)} onChange={reset} />
+        <div className="flex-1 grid place-items-center px-9 py-10">
+          <div className="w-full max-w-[680px] text-center">
+            <div className="eyebrow text-terracotta">Ready</div>
+            {s.currentN === 0 ? (
+              <>
+                <h2 className="font-serif text-[44px] md:text-[48px] leading-[1.05] tracking-[-0.02em] mt-3.5 mb-2">
+                  Your first phrase in <span className="italic">{targetLabel}</span> awaits.
+                </h2>
+                <p className="text-sm text-ink-2 leading-relaxed max-w-[480px] mx-auto mb-8">
+                  Tap continue and we&apos;ll generate phrase № 1.
+                </p>
+              </>
+            ) : (
+              <>
+                <h2 className="font-serif text-[44px] md:text-[48px] leading-[1.05] tracking-[-0.02em] mt-3.5 mb-2">
+                  Repeat <span className="text-terracotta">{windowLen} {windowLen === 1 ? "phrase" : "phrases"}</span>,
+                  <br />
+                  then earn phrase <span className="italic">№{s.currentN + 1}</span>.
+                </h2>
+                <p className="text-sm text-ink-2 leading-relaxed max-w-[480px] mx-auto mb-8">
+                  A single mistake resets the window to phrase one. Slow down. Breathe.
+                </p>
+
+                {windowLen > 0 && (
+                  <div className="bg-paper border border-rule rounded-2xl px-5 py-4 mb-8 text-left flex items-center gap-4">
+                    <div>
+                      <div className="eyebrow">Window</div>
+                      <div className="font-serif text-2xl mt-0.5 leading-none">
+                        {s.window[0].phrase_index} → {s.window[windowLen - 1].phrase_index}
+                      </div>
+                    </div>
+                    <div className="w-px h-8 bg-rule" />
+                    <div className="flex-1 flex gap-[3px] items-end h-8">
+                      {Array.from({ length: windowLen }).map((_, i) => (
+                        <div
+                          key={i}
+                          className="flex-1 bg-ink rounded-[1.5px]"
+                          style={{
+                            height: 6 + (i % 5) * 4 + Math.sin(i) * 3,
+                            opacity: 0.35 + i / 30,
+                          }}
+                        />
+                      ))}
+                    </div>
+                    <div className="font-mono text-[11px] text-ink-3">{windowLen} / 20</div>
+                  </div>
+                )}
+              </>
+            )}
+
+            <button onClick={beginSession} className={PRIMARY_BTN}>
+              {s.currentN === 0 ? "Generate first phrase" : "Begin session"}
+              <ArrowRight />
+            </button>
+          </div>
+        </div>
+        <Footer
+          left={
+            <>
+              Tip: <Kbd>↵</Kbd>
+              <span>submits</span>
+            </>
+          }
+          right={<span>Session #{s.currentN + 1}</span>}
+        />
+      </Page>
+    );
+  }
+
+  /* ───────────── REPEATING ───────────── */
+  if (stage.kind === "repeating") {
+    const current = stage.state.window[stage.index];
+    const answered = stage.state.window.slice(0, stage.index);
+    const currentWrongs = stage.wrongByPhrase[current.phrase_index] ?? [];
+
+    return (
+      <Page>
+        <Masthead sessionInfo={sessionInfo(stage.state)} onChange={reset} />
+
+        <div className="flex-1 grid grid-cols-1 lg:grid-cols-[1.45fr_1fr]">
+          {/* Prompt */}
+          <div className="px-10 lg:px-12 py-10 flex flex-col lg:border-r border-rule">
+            <div className="flex items-center justify-between mb-6">
+              <div className="eyebrow">
+                Phrase {stage.index + 1} of {stage.state.window.length}
+              </div>
+              <ProgressDots total={stage.state.window.length} done={stage.index} active={stage.index} />
+            </div>
+
+            {stage.mistake ? (
+              <div className="mt-2">
+                <div className="eyebrow text-bad mb-2">● Not quite</div>
+                <div className="text-[13px] text-ink-3 mb-1">{current.source_text}</div>
+                <div className="font-serif text-[38px] leading-[1.12] tracking-[-0.015em] text-ink mb-4">
+                  {stage.mistake.correct}
+                </div>
+                {currentWrongs.map((w, i) => (
+                  <div key={i} className="font-mono text-[13px] text-bad line-through">
+                    {w || "(empty)"}
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="mt-2">
+                <div className="eyebrow mb-2">{sourceLabel}</div>
+                <div className="font-serif text-[42px] md:text-[46px] leading-[1.12] tracking-[-0.015em] text-ink">
+                  {current.source_text}
+                </div>
+              </div>
+            )}
+
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                submitRepetition();
+              }}
+              className="mt-auto"
+            >
+              <div className="eyebrow mb-2.5">
+                {stage.mistake ? "Type the correct answer to continue" : `Type in ${targetLabel}`}
+              </div>
+              <label className={INPUT_WRAP}>
+                <input
+                  ref={inputRef}
+                  value={input}
+                  onChange={(e) => setInput(e.target.value)}
+                  placeholder={stage.mistake ? "Type the answer above…" : `Type in ${targetLabel}…`}
+                  className="font-serif text-[22px] text-ink flex-1 bg-transparent outline-none placeholder:text-ink-3 placeholder:italic leading-tight"
+                  autoFocus
+                />
+                <span className="font-mono text-[11px] text-ink-3">↵</span>
+              </label>
+              <button type="submit" disabled={!input.trim()} className="sr-only">
+                Submit
+              </button>
+            </form>
+          </div>
+
+          {/* Answered list */}
+          <div className="px-9 py-9 flex flex-col overflow-hidden">
+            <div className="flex items-baseline justify-between mb-3.5">
+              <div className="eyebrow text-good">● Answered</div>
+              <span className="font-mono text-[11px] text-ink-3">
+                {answered.length} / {stage.state.window.length}
+              </span>
+            </div>
+
+            {answered.length === 0 ? (
+              <p className="text-[12.5px] text-ink-3 italic">Your answered phrases will appear here.</p>
+            ) : (
+              <div className="flex flex-col gap-2.5 overflow-y-auto">
+                {answered.map((p) => (
+                  <AnsweredRow key={p.phrase_index} p={p} wrongs={stage.wrongByPhrase[p.phrase_index] ?? []} />
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+
+        <Footer
+          left={
+            stage.mistake ? (
+              <span className="text-bad">● Window will reset to phrase 1</span>
+            ) : (
+              <>
+                <Kbd>↵</Kbd>
+                <span>Submit</span>
+              </>
+            )
+          }
+          right={<span>Window resets on any mistake.</span>}
+        />
+      </Page>
+    );
+  }
+
+  /* ───────────── NEW PHRASE ───────────── */
+  if (stage.kind === "new-phrase") {
+    const p = stage.phrase;
+    return (
+      <Page>
+        <Masthead sessionInfo={sessionInfo(stage.state)} onChange={reset} />
+        <div className="flex-1 grid place-items-center px-9 py-8">
+          <div className="w-full max-w-[700px] text-center">
+            <div className="eyebrow text-terracotta">✦ New phrase № {p.phrase_index}</div>
+
+            <div className="mt-5 mb-1.5 text-[13px] text-ink-3">{sourceLabel}</div>
+            <div className="font-serif text-[28px] md:text-[30px] leading-[1.15] text-ink-2 italic">
+              &ldquo;{p.source_text}&rdquo;
+            </div>
+
+            <div className="flex items-center justify-center gap-3.5 my-6">
+              <div className="h-px w-[60px] bg-rule" />
+              <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
+                <path d="M6 1V11 M1 6L6 11L11 6" stroke="#8A8278" strokeWidth="1" strokeLinecap="round" />
+              </svg>
+              <div className="h-px w-[60px] bg-rule" />
+            </div>
+
+            <div className="text-[13px] text-ink-3">{targetLabel}</div>
+            <div className="font-serif text-[44px] md:text-[54px] leading-[1.05] tracking-[-0.02em] text-ink mt-1.5">
+              {p.target_text}
+            </div>
+
+            {p.new_words.length > 0 && (
+              <div className="flex justify-center gap-2 mt-6 flex-wrap items-center">
+                <span className="eyebrow mr-1">New</span>
+                {p.new_words.map((w) => (
+                  <span
+                    key={w}
+                    className="text-[13px] text-terracotta bg-terracotta-soft border border-terracotta px-2.5 py-1 rounded-full"
+                  >
+                    {w}
+                  </span>
+                ))}
+              </div>
+            )}
+
+            {stage.wrongAttempts.length > 0 && (
+              <div className="mt-5">
+                <div className="eyebrow text-bad mb-1.5">● Try again</div>
+                {stage.wrongAttempts.map((w, i) => (
+                  <div key={i} className="font-mono text-[13px] text-bad line-through">
+                    {w || "(empty)"}
+                  </div>
+                ))}
+              </div>
+            )}
+
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                submitNewPhrase();
+              }}
+              className="mt-7 text-left"
+            >
+              <label className={INPUT_WRAP}>
+                <input
+                  ref={inputRef}
+                  value={input}
+                  onChange={(e) => setInput(e.target.value)}
+                  placeholder="Type the new phrase to lock it in…"
+                  className="font-serif text-[22px] text-ink flex-1 bg-transparent outline-none placeholder:text-ink-3 placeholder:italic leading-tight"
+                  autoFocus
+                />
+                <span className="font-mono text-[11px] text-ink-3">↵ Confirm</span>
+              </label>
+              <button type="submit" disabled={!input.trim()} className="sr-only">
+                Confirm
+              </button>
+            </form>
+          </div>
+        </div>
+        <Footer
+          left={<span>Generated for level <span className="text-ink-2">{level}</span></span>}
+          right={
+            <>
+              <span>Type to lock in</span>
+              <Kbd>↵</Kbd>
+            </>
+          }
+        />
+      </Page>
+    );
+  }
+
+  /* ───────────── DONE ───────────── */
+  if (stage.kind === "done") {
+    const s = stage.state;
+    const p = stage.lastPhrase;
+    return (
+      <Page>
+        <Masthead sessionInfo={sessionInfo(s)} onChange={reset} />
+        <div className="flex-1 grid place-items-center px-9 py-9">
+          <div className="w-full max-w-[680px] text-center">
+            <div className="eyebrow text-terracotta">Session complete</div>
+            <h2 className="font-serif text-[56px] md:text-[60px] leading-[1.02] tracking-[-0.02em] mt-4 mb-1">
+              Phrase <span className="italic text-terracotta">№{p.phrase_index}</span>
+              <br />
+              is yours.
+            </h2>
+            <p className="text-[14.5px] text-ink-2 leading-snug mt-4 mx-auto max-w-[440px]">
+              <span className="font-serif text-[18px]">&ldquo;{p.target_text}&rdquo;</span>
+              <br />
+              <span className="text-ink-3 text-[12.5px]">{p.source_text}</span>
+            </p>
+
+            <div className="mt-9 grid grid-cols-3 bg-paper border border-rule rounded-2xl overflow-hidden">
+              <Totals n={String(p.phrase_index)} l="Phrases" />
+              <Totals
+                n={String(s.learnedWordCount)}
+                l="Words learned"
+                sub={`/ ${s.targetWordCount.toLocaleString()}`}
+              />
+              <Totals n={level} l="Level" accent last />
+            </div>
+
+            <button onClick={loadState} className={`${PRIMARY_BTN} mt-8`}>
+              Start next session
+              <ArrowRight />
+            </button>
+          </div>
+        </div>
+        <Footer
+          left={<span>Saved</span>}
+          right={
+            <>
+              <Kbd>↵</Kbd>
+              <span>Next session</span>
+            </>
+          }
+        />
+      </Page>
+    );
+  }
+
+  return null;
+}
+
+/* ───────────── Helper components ───────────── */
+
+function Page({ children }: { children: React.ReactNode }) {
+  return (
+    <main className="min-h-screen flex items-center justify-center p-4 md:p-8">
+      <div className="w-full max-w-[1100px] min-h-[720px] bg-cream rounded-3xl border border-rule shadow-[0_30px_80px_-30px_rgba(26,23,20,0.25)] flex flex-col overflow-hidden">
+        {children}
+      </div>
+    </main>
+  );
+}
+
+function Stat({ n, l }: { n: string; l: string }) {
+  return (
+    <div>
+      <div className="font-serif text-3xl leading-none text-ink">{n}</div>
+      <div className="eyebrow mt-1.5">{l}</div>
+    </div>
+  );
+}
+
+function FieldRow({ label, children, last }: { label: string; children: React.ReactNode; last?: boolean }) {
+  return (
+    <div className={`py-4.5 ${last ? "" : "border-b border-rule"}`} style={{ paddingTop: 18, paddingBottom: 18 }}>
+      <div className="eyebrow mb-2.5">{label}</div>
+      {children}
+    </div>
+  );
+}
+
+function SelectField({
+  value,
+  onChange,
+  options,
+  accent,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  options: ReadonlyArray<{ code: string; label: string; flag?: string }>;
+  accent?: boolean;
+}) {
+  return (
+    <div className="relative flex items-center bg-paper border border-rule rounded-[10px] px-4 py-2.5">
+      <select
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        className={`appearance-none bg-transparent outline-none font-serif text-[22px] pr-7 flex-1 cursor-pointer ${
+          accent ? "text-terracotta" : "text-ink"
+        }`}
+      >
+        {options.map((o) => (
+          <option key={o.code} value={o.code} className="font-sans text-base text-ink bg-paper">
+            {o.label}
+          </option>
+        ))}
+      </select>
+      <svg width="12" height="12" viewBox="0 0 12 12" fill="none" className="absolute right-4 pointer-events-none">
+        <path d="M3 5L6 8L9 5" stroke="#8A8278" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
+      </svg>
+    </div>
+  );
+}
+
+function LevelStrip({ active, onPick }: { active: LevelCode; onPick: (l: LevelCode) => void }) {
+  return (
+    <div className="grid grid-cols-6 gap-1.5">
+      {LEVELS.map((l) => {
+        const isActive = l.code === active;
+        return (
+          <button
+            key={l.code}
+            type="button"
+            onClick={() => onPick(l.code)}
+            className={`px-1.5 pt-2.5 pb-2 rounded-lg border text-center transition-colors ${
+              isActive
+                ? "border-ink bg-ink text-paper"
+                : "border-rule bg-paper text-ink hover:border-ink-3"
+            }`}
+          >
+            <div className="font-mono text-[12px] font-medium">{l.code}</div>
+            <div className={`text-[9.5px] mt-0.5 tracking-wide ${isActive ? "text-paper/65" : "text-ink-3"}`}>
+              {l.targetWords >= 1000 ? `${l.targetWords / 1000}k` : l.targetWords}
+            </div>
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function ProgressDots({ total, done, active }: { total: number; done: number; active: number }) {
+  return (
+    <div className="flex gap-[3px]">
+      {Array.from({ length: total }).map((_, i) => {
+        const isDone = i < done;
+        const isActive = i === active;
+        return (
+          <div
+            key={i}
+            className={`h-1.5 rounded-[3px] transition-all duration-200 ${
+              isDone ? "bg-ink" : isActive ? "bg-terracotta" : "bg-rule"
+            }`}
+            style={{ width: isActive ? 14 : 6 }}
+          />
+        );
+      })}
+    </div>
+  );
+}
+
+function AnsweredRow({ p, wrongs }: { p: WindowPhrase; wrongs: string[] }) {
+  return (
+    <div className="px-3.5 py-2.5 bg-paper border border-rule rounded-[10px]">
+      <div className="text-[12px] text-ink-3 mb-0.5">{p.source_text}</div>
+      <div className="font-serif text-[17px] text-ink leading-tight">{p.target_text}</div>
+      {wrongs.map((w, i) => (
+        <div key={i} className="font-mono text-[11px] text-bad line-through mt-0.5">
+          {w || "(empty)"}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function Totals({ n, l, sub, accent, last }: { n: string; l: string; sub?: string; accent?: boolean; last?: boolean }) {
+  return (
+    <div className={`px-3.5 py-4.5 ${last ? "" : "border-r border-rule"}`} style={{ paddingTop: 18, paddingBottom: 18 }}>
+      <div className={`font-serif text-3xl leading-none ${accent ? "text-terracotta" : "text-ink"}`}>
+        {n}
+        {sub && <span className="text-[13px] text-ink-3 font-mono"> {sub}</span>}
+      </div>
+      <div className="eyebrow mt-2">{l}</div>
+    </div>
+  );
+}
