@@ -1,10 +1,16 @@
 import OpenAI from "openai";
 import { languageLabel, levelInfo, type LanguageCode, type LevelCode } from "./languages";
 
-const client = new OpenAI({
-  apiKey: process.env.DEEPSEEK_API_KEY,
-  baseURL: "https://api.deepseek.com",
-});
+let cachedClient: OpenAI | null = null;
+function getClient(): OpenAI {
+  if (cachedClient) return cachedClient;
+  const apiKey = process.env.DEEPSEEK_API_KEY;
+  if (!apiKey) {
+    throw new Error("DEEPSEEK_API_KEY is not set. Add it to .env.local or your hosting env vars.");
+  }
+  cachedClient = new OpenAI({ apiKey, baseURL: "https://api.deepseek.com" });
+  return cachedClient;
+}
 
 export type GeneratedPhrase = {
   source_text: string;
@@ -61,7 +67,7 @@ ${recent.length ? recent.map((p, i) => `${i + 1}. ${p}`).join("\n") : "(none yet
 
 Pick a completely fresh topic and emit a phrase with maximum new vocabulary. Return JSON only.`;
 
-  const completion = await client.chat.completions.create({
+  const completion = await getClient().chat.completions.create({
     model: "deepseek-chat",
     messages: [
       { role: "system", content: system },

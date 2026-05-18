@@ -1,22 +1,29 @@
-import { neon } from "@neondatabase/serverless";
+import { neon, type NeonQueryFunction } from "@neondatabase/serverless";
 
-if (!process.env.DATABASE_URL) {
-  throw new Error("DATABASE_URL is not set. Add it to .env.local or your hosting env vars.");
-}
-
-const rawSql = neon(process.env.DATABASE_URL);
-
+let cachedSql: NeonQueryFunction<false, false> | null = null;
 let initPromise: Promise<void> | null = null;
 
+function getRawSql(): NeonQueryFunction<false, false> {
+  if (cachedSql) return cachedSql;
+  const url = process.env.DATABASE_URL;
+  if (!url) {
+    throw new Error("DATABASE_URL is not set. Add it to .env.local or your hosting env vars.");
+  }
+  cachedSql = neon(url);
+  return cachedSql;
+}
+
 async function init(): Promise<void> {
-  await rawSql`
+  const sql = getRawSql();
+
+  await sql`
     CREATE TABLE IF NOT EXISTS users (
       id TEXT PRIMARY KEY,
       created_at BIGINT NOT NULL
     )
   `;
 
-  await rawSql`
+  await sql`
     CREATE TABLE IF NOT EXISTS user_levels (
       user_id TEXT NOT NULL,
       source_lang TEXT NOT NULL,
@@ -29,7 +36,7 @@ async function init(): Promise<void> {
     )
   `;
 
-  await rawSql`
+  await sql`
     CREATE TABLE IF NOT EXISTS phrases (
       id SERIAL PRIMARY KEY,
       user_id TEXT NOT NULL,
@@ -45,7 +52,7 @@ async function init(): Promise<void> {
     )
   `;
 
-  await rawSql`
+  await sql`
     CREATE INDEX IF NOT EXISTS idx_phrases_lookup
       ON phrases (user_id, source_lang, target_lang, level, phrase_index)
   `;
@@ -59,5 +66,5 @@ export async function getSql() {
     });
   }
   await initPromise;
-  return rawSql;
+  return getRawSql();
 }
