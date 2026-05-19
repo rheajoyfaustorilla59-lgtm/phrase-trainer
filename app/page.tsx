@@ -516,6 +516,27 @@ export default function Home() {
                           <span className="font-mono text-[11px] text-ink-3 uppercase">
                             {p.level}
                           </span>
+                          <button
+                            onClick={() => {
+                              const confirmed = window.confirm(
+                                `Delete all data for ${tgtLabel} (${p.level})? This cannot be undone.`,
+                              );
+                              if (!confirmed) return;
+                              (async () => {
+                                try {
+                                  await fetch(
+                                    `/api/delete-language?source=${p.source_lang}&target=${p.target_lang}&level=${p.level}`,
+                                    { method: "DELETE" },
+                                  );
+                                  setStage({ kind: "dashboard-loading" });
+                                } catch {}
+                              })();
+                            }}
+                            className="text-[10px] text-ink-3 hover:text-bad transition-colors font-mono"
+                            title={`Delete ${tgtLabel} (${p.level})`}
+                          >
+                            ✕
+                          </button>
                         </div>
                       </div>
 

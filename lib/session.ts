@@ -598,6 +598,18 @@ export async function getBlockPhrases(
   }));
 }
 
+export async function deleteLanguage(
+  userId: string,
+  sourceLang: LanguageCode,
+  targetLang: LanguageCode,
+  level: LevelCode,
+): Promise<void> {
+  const sql = await getSql();
+  await sql`DELETE FROM phrases WHERE user_id = ${userId} AND source_lang = ${sourceLang} AND target_lang = ${targetLang} AND level = ${level}`;
+  await sql`DELETE FROM phrase_blocks WHERE user_id = ${userId} AND source_lang = ${sourceLang} AND target_lang = ${targetLang} AND level = ${level}`;
+  await sql`DELETE FROM user_levels WHERE user_id = ${userId} AND source_lang = ${sourceLang} AND target_lang = ${targetLang} AND level = ${level}`;
+}
+
 export async function getNextPendingPhrase(
   userId: string,
   sourceLang: LanguageCode,
