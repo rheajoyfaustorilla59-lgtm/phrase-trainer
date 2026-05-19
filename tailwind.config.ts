@@ -31,6 +31,10 @@ const config: Config = {
           DEFAULT: "oklch(0.55 0.16 25)",
           soft: "oklch(0.93 0.05 25)",
         },
+        amber: {
+          DEFAULT: "oklch(0.70 0.14 75)",
+          soft: "oklch(0.94 0.05 75)",
+        },
       },
       fontFamily: {
         sans: ["var(--font-geist)", "ui-sans-serif", "system-ui", "sans-serif"],

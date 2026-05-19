@@ -857,25 +857,14 @@ export default function Home() {
                 ) : (
                   <div className="mt-2">
                     <div className="eyebrow mb-2">{sourceLabel}</div>
-                    <div className="font-serif text-[42px] md:text-[46px] leading-[1.12] tracking-[-0.015em] text-ink mb-2">
+                    <div className="font-serif text-[42px] md:text-[46px] leading-[1.12] tracking-[-0.015em] text-ink mb-3">
                       {currentPhrase.source_text}
                     </div>
-                    {/* Show the target text as a light reference for beginners */}
-                    <div className="flex items-center gap-2">
-                      <span className="text-[13px] text-ink-2/50 italic">
-                        {currentPhrase.target_text}
-                      </span>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          // Fill input with the correct answer so user can copy/submit
-                          setInput(currentPhrase.target_text);
-                        }}
-                        className="text-[10px] text-ink-3 hover:text-terracotta underline underline-offset-2 transition-colors"
-                      >
-                        ✨ use this
-                      </button>
-                    </div>
+                    {/* Reveal button for beginners who need a hint */}
+                    <ShowAnswerButton
+                      targetText={currentPhrase.target_text}
+                      onUse={(text) => setInput(text)}
+                    />
                   </div>
                 )}
 
@@ -1217,6 +1206,43 @@ function BlockDots({ done, total }: { done: number; total: number }) {
         />
       ))}
     </div>
+  );
+}
+
+function ShowAnswerButton({
+  targetText,
+  onUse,
+}: {
+  targetText: string;
+  onUse: (text: string) => void;
+}) {
+  const [revealed, setRevealed] = useState(false);
+
+  if (revealed) {
+    return (
+      <div className="flex items-center gap-2.5 bg-amber-soft border border-amber/30 rounded-xl px-4 py-3">
+        <span className="font-serif text-[17px] text-ink leading-tight">
+          {targetText}
+        </span>
+        <button
+          type="button"
+          onClick={() => onUse(targetText)}
+          className="text-[10px] text-ink-3 hover:text-terracotta underline underline-offset-2 ml-auto shrink-0 transition-colors"
+        >
+          ✨ use this
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <button
+      type="button"
+      onClick={() => setRevealed(true)}
+      className="text-[11px] text-ink-2 hover:text-ink underline underline-offset-2 transition-colors"
+    >
+      👁 Show translation
+    </button>
   );
 }
 
