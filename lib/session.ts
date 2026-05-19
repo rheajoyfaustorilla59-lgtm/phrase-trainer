@@ -486,12 +486,10 @@ export async function createBlock(
 ): Promise<BlockRow> {
   const sql = await getSql();
 
-  // Disallow creating a new block while one is still in progress
+  // Auto-complete any existing active block so a new one can be created
   const existing = await getActiveBlock(userId, sourceLang, targetLang, level);
   if (existing) {
-    throw new Error(
-      `An active block already exists ("${existing.description}"). Finish it before creating a new one.`,
-    );
+    await sql`UPDATE phrase_blocks SET completed = TRUE WHERE id = ${existing.id}`;
   }
 
   const knownWords = await getAllKnownWords(userId, sourceLang, targetLang, level);

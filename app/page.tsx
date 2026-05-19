@@ -863,7 +863,6 @@ export default function Home() {
                     {/* Reveal button for beginners who need a hint */}
                     <ShowAnswerButton
                       targetText={currentPhrase.target_text}
-                      onUse={(text) => setInput(text)}
                     />
                   </div>
                 )}
@@ -1211,26 +1210,17 @@ function BlockDots({ done, total }: { done: number; total: number }) {
 
 function ShowAnswerButton({
   targetText,
-  onUse,
 }: {
   targetText: string;
-  onUse: (text: string) => void;
 }) {
   const [revealed, setRevealed] = useState(false);
 
   if (revealed) {
     return (
-      <div className="flex items-center gap-2.5 bg-amber-soft border border-amber/30 rounded-xl px-4 py-3">
+      <div className="flex items-center gap-2 bg-amber-soft border border-amber/30 rounded-xl px-4 py-3">
         <span className="font-serif text-[17px] text-ink leading-tight">
           {targetText}
         </span>
-        <button
-          type="button"
-          onClick={() => onUse(targetText)}
-          className="text-[10px] text-ink-3 hover:text-terracotta underline underline-offset-2 ml-auto shrink-0 transition-colors"
-        >
-          ✨ use this
-        </button>
       </div>
     );
   }
