@@ -3,7 +3,7 @@ import { tokenizeWords, generatePhrase, generateBlock } from "./deepseek";
 import type { LanguageCode, LevelCode } from "./languages";
 import { randomUUID } from "crypto";
 
-export const BLOCK_SIZE = 5;
+export const BLOCK_SIZE = 20;
 
 export const WINDOW_SIZE = 20;
 
@@ -457,6 +457,37 @@ export async function createBlock(
     completed: false,
     delivered_count: generated.phrases.length,
   };
+}
+
+export async function getBlockPhrases(
+  userId: string,
+  sourceLang: LanguageCode,
+  targetLang: LanguageCode,
+  level: LevelCode,
+  blockId: number,
+): Promise<PhraseRow[]> {
+  const sql = await getSql();
+  const rows = (await sql`
+    SELECT phrase_index, source_text, target_text, new_words
+    FROM phrases
+    WHERE user_id = ${userId}
+      AND source_lang = ${sourceLang}
+      AND target_lang = ${targetLang}
+      AND level = ${level}
+      AND block_id = ${blockId}
+    ORDER BY phrase_index ASC
+  `) as Array<{
+    phrase_index: number;
+    source_text: string;
+    target_text: string;
+    new_words: string;
+  }>;
+  return rows.map((r) => ({
+    phrase_index: r.phrase_index,
+    source_text: r.source_text,
+    target_text: r.target_text,
+    new_words: JSON.parse(r.new_words) as string[],
+  }));
 }
 
 export async function getNextPendingPhrase(

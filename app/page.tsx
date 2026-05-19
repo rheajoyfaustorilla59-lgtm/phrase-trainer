@@ -1,21 +1,24 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useSession, signIn, signOut } from "next-auth/react";
 import { LANGUAGES, LEVELS, type LanguageCode, type LevelCode } from "@/lib/languages";
 
-type WindowPhrase = {
+/* ─── Types ─── */
+
+type PhraseItem = {
   phrase_index: number;
   source_text: string;
   target_text: string;
   new_words: string[];
 };
 
-type StateResponse = {
-  currentN: number;
-  learnedWordCount: number;
-  targetWordCount: number;
-  window: WindowPhrase[];
+type SessionBlock = {
+  id: number;
+  description: string;
+  phrase_count: number;
+  completed: boolean;
+  delivered_count: number;
 };
 
 type ProgressRow = {
@@ -29,6 +32,11 @@ type ProgressRow = {
   active_block_description: string | null;
 };
 
+type KnownWordsData = {
+  words: string[];
+  count: number;
+};
+
 type DashboardData = {
   progress: ProgressRow[];
   uiLang: string;
@@ -37,26 +45,20 @@ type DashboardData = {
 type Stage =
   | { kind: "dashboard-loading" }
   | { kind: "dashboard"; data: DashboardData }
-  | { kind: "picker" }
   | { kind: "block-create"; submitting: boolean; error: string | null }
   | { kind: "loading" }
-  | { kind: "ready"; state: StateResponse }
   | {
-      kind: "repeating";
-      state: StateResponse;
-      index: number;
-      mistake: { wrong: string; correct: string } | null;
+      kind: "session";
+      block: SessionBlock;
+      phrases: PhraseItem[];
+      currentN: number;
+      submitting: boolean;
+      mistake: { correct: string; wrong: string } | null;
       wrongByPhrase: Record<number, string[]>;
     }
-  | { kind: "generating"; state: StateResponse }
-  | {
-      kind: "new-phrase";
-      state: StateResponse;
-      phrase: WindowPhrase;
-      mistake: { wrong: string; correct: string } | null;
-      wrongAttempts: string[];
-    }
-  | { kind: "done"; state: StateResponse; lastPhrase: WindowPhrase };
+  | { kind: "block-done"; block: SessionBlock; phrases: PhraseItem[] };
+
+/* ─── Helpers ─── */
 
 function normalize(text: string): string {
   return text
@@ -66,7 +68,7 @@ function normalize(text: string): string {
     .replace(/\s+/g, " ");
 }
 
-/* ───────────── Shared chrome ───────────── */
+/* ─── Shared chrome ─── */
 
 function Mark() {
   return (
@@ -83,7 +85,7 @@ function Masthead({
   onChange,
   user,
 }: {
-  sessionInfo?: { pair: string; learned: number; target: number; phraseN: number };
+  sessionInfo?: { pair: string; done: number; total: number };
   onChange?: () => void;
   user?: { name?: string | null; email?: string | null; image?: string | null };
 }) {
@@ -91,9 +93,7 @@ function Masthead({
     <div className="flex items-center justify-between px-9 py-5 border-b border-rule">
       <div className="flex items-center gap-3.5">
         <Mark />
-        <div className="flex items-baseline gap-2.5">
-          <span className="font-serif text-[22px] leading-none text-ink">Phrase Trainer</span>
-        </div>
+        <span className="font-serif text-[22px] leading-none text-ink">Phrase Trainer</span>
       </div>
       <div className="flex items-center gap-6">
         {sessionInfo && (
@@ -101,9 +101,8 @@ function Masthead({
             <div className="text-right">
               <div className="eyebrow">{sessionInfo.pair}</div>
               <div className="text-[12.5px] text-ink-2 mt-[3px] tabular">
-                <span className="text-ink font-medium">{sessionInfo.learned.toLocaleString()}</span>
-                <span className="text-ink-3"> / {sessionInfo.target.toLocaleString()} words</span>
-                <span className="text-ink-3"> · phrase #{sessionInfo.phraseN}</span>
+                <span className="text-ink font-medium">{sessionInfo.done}</span>
+                <span className="text-ink-3"> / {sessionInfo.total} phrases</span>
               </div>
             </div>
             {onChange && (
@@ -124,25 +123,16 @@ function Masthead({
             <div className="flex items-center gap-2 bg-good-soft border border-good/30 rounded-full pl-1 pr-3 py-[3px]">
               {user.image ? (
                 // eslint-disable-next-line @next/next/no-img-element
-                <img
-                  src={user.image}
-                  alt={user.name ?? "User"}
-                  className="w-6 h-6 rounded-full"
-                />
+                <img src={user.image} alt={user.name ?? "User"} className="w-6 h-6 rounded-full" />
               ) : (
                 <div className="w-6 h-6 rounded-full bg-good/30 flex items-center justify-center text-[11px] font-medium text-good">
                   {(user.name ?? user.email ?? "?").charAt(0).toUpperCase()}
                 </div>
               )}
               <div className="flex flex-col leading-tight">
-                <span className="text-[10px] uppercase tracking-wider text-good font-semibold">
-                  Signed in
-                </span>
+                <span className="text-[10px] uppercase tracking-wider text-good font-semibold">Signed in</span>
                 {user.name && (
-                  <span
-                    className="text-[12px] text-ink font-medium max-w-[140px] truncate"
-                    title={user.email ?? undefined}
-                  >
+                  <span className="text-[12px] text-ink font-medium max-w-[140px] truncate" title={user.email ?? undefined}>
                     {user.name}
                   </span>
                 )}
@@ -151,7 +141,6 @@ function Masthead({
             <button
               onClick={() => signOut()}
               className="inline-flex items-center border border-rule bg-transparent text-ink-2 text-[11.5px] font-medium px-3 py-[7px] rounded-full hover:text-ink hover:border-ink-3 transition-colors"
-              title={user.email ?? undefined}
             >
               Sign out
             </button>
@@ -193,23 +182,30 @@ function ArrowRight() {
   );
 }
 
-/* ───────────── Main component ───────────── */
+/* ─── Main component ─── */
 
 export default function Home() {
   const { data: session, status } = useSession();
   const [sourceLang, setSourceLang] = useState<LanguageCode>("english");
-  const [targetLang, setTargetLang] = useState<LanguageCode>("tagalog");
+  const [targetLang, setTargetLang] = useState<LanguageCode>("cebuano");
   const [level, setLevel] = useState<LevelCode>("A1");
   const [stage, setStage] = useState<Stage>({ kind: "dashboard-loading" });
   const [input, setInput] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const [wordsModal, setWordsModal] = useState<{
+    source: string;
+    target: string;
+    level: string;
+    words: string[];
+    count: number;
+    loading: boolean;
+  } | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
-    inputRef.current?.focus();
-  }, [stage]);
+    if (stage.kind === "session") inputRef.current?.focus();
+  }, [stage.kind]);
 
-  // Load dashboard when user becomes authenticated
   useEffect(() => {
     if (status !== "authenticated") return;
     if (stage.kind !== "dashboard-loading") return;
@@ -227,34 +223,11 @@ export default function Home() {
         }
       }
     })();
-    return () => {
-      cancelled = true;
-    };
+    return () => { cancelled = true; };
   }, [status, stage.kind]);
 
-  async function reloadDashboard() {
-    setStage({ kind: "dashboard-loading" });
-  }
+  /* ─── AUTH GATE ─── */
 
-  async function saveUiLang(uiLang: string) {
-    try {
-      await fetch("/api/dashboard", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ uiLang }),
-      });
-      if (stage.kind === "dashboard") {
-        setStage({ kind: "dashboard", data: { ...stage.data, uiLang } });
-      }
-    } catch {
-      // ignore — preference is purely cosmetic for now
-    }
-  }
-
-  const sourceLabel = useMemo(() => LANGUAGES.find((l) => l.code === sourceLang)?.label, [sourceLang]);
-  const targetLabel = useMemo(() => LANGUAGES.find((l) => l.code === targetLang)?.label, [targetLang]);
-
-  // ───────────── AUTH GATE ─────────────
   if (status === "loading") {
     return (
       <Page>
@@ -278,70 +251,77 @@ export default function Home() {
             <p className="text-[14.5px] text-ink-2 leading-[1.6] mb-9">
               Sign in with Google to save your progress across devices.
             </p>
-            <button
-              onClick={() => signIn("google")}
-              className={PRIMARY_BTN}
-            >
+            <button onClick={() => signIn("google")} className={PRIMARY_BTN}>
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-                <path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" fill="#4285F4"/>
-                <path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" fill="#34A853"/>
-                <path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z" fill="#FBBC05"/>
-                <path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" fill="#EA4335"/>
+                <path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" fill="#4285F4" />
+                <path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" fill="#34A853" />
+                <path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z" fill="#FBBC05" />
+                <path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" fill="#EA4335" />
               </svg>
               Sign in with Google
             </button>
             <p className="mt-5 text-[11.5px] text-ink-3">
-              Your progress is tied to your Google account.
+              Privacy: name + email + avatar only.
             </p>
           </div>
         </div>
-        <Footer
-          left={<span>Anonymous mode disabled — sign in required.</span>}
-          right={<span>Privacy: name + email + avatar only.</span>}
-        />
+        <Footer left={<span>Sign in required to save progress.</span>} />
       </Page>
     );
   }
 
-  async function loadState() {
-    setError(null);
-    setStage({ kind: "loading" });
-    try {
-      const res = await fetch("/api/state", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ sourceLang, targetLang, level }),
-      });
-      if (!res.ok) throw new Error(await res.text());
-      const data = (await res.json()) as StateResponse;
-      setStage({ kind: "ready", state: data });
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed to load state");
-      setStage({ kind: "picker" });
-    }
-  }
+  /* ─── Handlers ─── */
 
   async function startSession() {
     if (sourceLang === targetLang) {
       setError("Pick two different languages.");
       return;
     }
-    // Check if there's an active block. If yes, go straight to training.
-    // If no, route to block-create so the user can build the next batch.
     setError(null);
     setStage({ kind: "loading" });
     try {
-      const url = `/api/blocks?source=${sourceLang}&target=${targetLang}&level=${level}`;
-      const res = await fetch(url);
+      const res = await fetch(`/api/blocks?source=${sourceLang}&target=${targetLang}&level=${level}`);
       if (!res.ok) throw new Error(await res.text());
       const data = (await res.json()) as { activeBlock: { id: number } | null };
       if (data.activeBlock) {
-        await loadState();
+        await loadSession();
       } else {
         setStage({ kind: "block-create", submitting: false, error: null });
       }
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed to check blocks");
+      setError(e instanceof Error ? e.message : "Failed");
+      setStage({ kind: "dashboard-loading" });
+    }
+  }
+
+  async function loadSession() {
+    setStage({ kind: "loading" });
+    setInput("");
+    try {
+      const res = await fetch(
+        `/api/session-phrases?source=${sourceLang}&target=${targetLang}&level=${level}`,
+      );
+      if (!res.ok) throw new Error(await res.text());
+      const data = (await res.json()) as {
+        currentN: number;
+        block: SessionBlock | null;
+        phrases: PhraseItem[];
+      };
+      if (!data.block) {
+        setStage({ kind: "block-create", submitting: false, error: null });
+        return;
+      }
+      setStage({
+        kind: "session",
+        block: data.block,
+        phrases: data.phrases,
+        currentN: data.currentN,
+        submitting: false,
+        mistake: null,
+        wrongByPhrase: {},
+      });
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to load session");
       setStage({ kind: "dashboard-loading" });
     }
   }
@@ -358,130 +338,73 @@ export default function Home() {
         const data = (await res.json().catch(() => ({}))) as { error?: string };
         throw new Error(data.error ?? "Failed to create block");
       }
-      await loadState();
+      await loadSession();
     } catch (e) {
       setStage({
         kind: "block-create",
         submitting: false,
-        error: e instanceof Error ? e.message : "Failed to create block",
+        error: e instanceof Error ? e.message : "Failed",
       });
     }
   }
 
-  function beginSession() {
-    if (stage.kind !== "ready") return;
-    if (stage.state.window.length === 0) {
-      requestNewPhrase(stage.state);
+  async function submitAnswer() {
+    if (stage.kind !== "session" || stage.submitting) return;
+    const val = input.trim();
+    if (!val) return;
+
+    const currentPhrase = stage.phrases.find((p) => p.phrase_index > stage.currentN);
+    if (!currentPhrase) return;
+
+    if (stage.mistake) {
+      if (normalize(val) !== normalize(stage.mistake.correct)) {
+        setInput("");
+        return;
+      }
+      await advancePhrase(currentPhrase);
+      return;
+    }
+
+    if (normalize(val) === normalize(currentPhrase.target_text)) {
+      await advancePhrase(currentPhrase);
     } else {
+      const prev = stage.wrongByPhrase[currentPhrase.phrase_index] ?? [];
       setStage({
-        kind: "repeating",
-        state: stage.state,
-        index: 0,
-        mistake: null,
-        wrongByPhrase: {},
+        ...stage,
+        mistake: { correct: currentPhrase.target_text, wrong: val },
+        wrongByPhrase: {
+          ...stage.wrongByPhrase,
+          [currentPhrase.phrase_index]: [...prev, val],
+        },
       });
       setInput("");
     }
   }
 
-  async function requestNewPhrase(state: StateResponse) {
-    setStage({ kind: "generating", state });
-    setError(null);
+  async function advancePhrase(phrase: PhraseItem) {
+    setStage((prev) =>
+      prev.kind === "session" ? { ...prev, submitting: true, mistake: null } : prev,
+    );
+    setInput("");
     try {
-      const res = await fetch("/api/next-phrase", {
+      await fetch("/api/next-phrase", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ sourceLang, targetLang, level }),
       });
-      if (res.status === 409) {
-        // Block exhausted — prompt the user to create a new one
-        setStage({ kind: "block-create", submitting: false, error: null });
-        return;
-      }
-      if (!res.ok) {
-        const data = (await res.json().catch(() => ({}))) as { error?: string };
-        throw new Error(data.error ?? "Failed to fetch new phrase");
-      }
-      const { phrase } = (await res.json()) as { phrase: WindowPhrase };
-      setStage({
-        kind: "new-phrase",
-        state,
-        phrase,
-        mistake: null,
-        wrongAttempts: [],
+      setStage((prev) => {
+        if (prev.kind !== "session") return prev;
+        const newCurrentN = phrase.phrase_index;
+        const remaining = prev.phrases.filter((p) => p.phrase_index > newCurrentN);
+        if (remaining.length === 0) {
+          return { kind: "block-done", block: prev.block, phrases: prev.phrases };
+        }
+        return { ...prev, currentN: newCurrentN, submitting: false, mistake: null };
       });
-      setInput("");
+      setTimeout(() => inputRef.current?.focus(), 0);
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed");
-      setStage({ kind: "ready", state });
-    }
-  }
-
-  function submitRepetition() {
-    if (stage.kind !== "repeating") return;
-    if (stage.mistake) {
-      if (normalize(input) === normalize(stage.mistake.correct)) {
-        setStage({ ...stage, index: 0, mistake: null });
-        setInput("");
-      } else {
-        const phraseIdx = stage.state.window[stage.index].phrase_index;
-        const prev = stage.wrongByPhrase[phraseIdx] ?? [];
-        setStage({
-          ...stage,
-          mistake: { wrong: input, correct: stage.mistake.correct },
-          wrongByPhrase: { ...stage.wrongByPhrase, [phraseIdx]: [...prev, input] },
-        });
-        setInput("");
-      }
-      return;
-    }
-    const current = stage.state.window[stage.index];
-    if (normalize(input) === normalize(current.target_text)) {
-      const nextIndex = stage.index + 1;
-      setInput("");
-      if (nextIndex >= stage.state.window.length) {
-        requestNewPhrase(stage.state);
-      } else {
-        setStage({ ...stage, index: nextIndex, mistake: null });
-      }
-    } else {
-      const prev = stage.wrongByPhrase[current.phrase_index] ?? [];
-      setStage({
-        ...stage,
-        mistake: { wrong: input, correct: current.target_text },
-        wrongByPhrase: { ...stage.wrongByPhrase, [current.phrase_index]: [...prev, input] },
-      });
-      setInput("");
-    }
-  }
-
-  function submitNewPhrase() {
-    if (stage.kind !== "new-phrase") return;
-    const correct = stage.phrase.target_text;
-    if (stage.mistake) {
-      if (normalize(input) === normalize(correct)) {
-        setStage({ kind: "done", state: stage.state, lastPhrase: stage.phrase });
-        setInput("");
-      } else {
-        setStage({
-          ...stage,
-          mistake: { wrong: input, correct },
-          wrongAttempts: [...stage.wrongAttempts, input],
-        });
-        setInput("");
-      }
-      return;
-    }
-    if (normalize(input) === normalize(correct)) {
-      setStage({ kind: "done", state: stage.state, lastPhrase: stage.phrase });
-      setInput("");
-    } else {
-      setStage({
-        ...stage,
-        mistake: { wrong: input, correct },
-        wrongAttempts: [...stage.wrongAttempts, input],
-      });
-      setInput("");
+      setError(e instanceof Error ? e.message : "Failed to advance");
+      setStage((prev) => (prev.kind === "session" ? { ...prev, submitting: false } : prev));
     }
   }
 
@@ -491,28 +414,8 @@ export default function Home() {
     setInput("");
   }
 
-  const sessionInfo = (s: StateResponse) => ({
-    pair: `${sourceLabel} → ${targetLabel} · ${level}`,
-    learned: s.learnedWordCount,
-    target: s.targetWordCount,
-    phraseN: s.currentN,
-  });
+  /* ─── DASHBOARD LOADING ─── */
 
-  /* ───────────── BLOCK CREATE ───────────── */
-  if (stage.kind === "block-create") {
-    return <BlockCreateView
-      sourceLabel={sourceLabel}
-      targetLabel={targetLabel}
-      level={level}
-      submitting={stage.submitting}
-      error={stage.error}
-      onSubmit={submitBlockCreate}
-      onBack={() => setStage({ kind: "dashboard-loading" })}
-      user={session?.user}
-    />;
-  }
-
-  /* ───────────── DASHBOARD LOADING ───────────── */
   if (stage.kind === "dashboard-loading") {
     return (
       <Page>
@@ -524,83 +427,52 @@ export default function Home() {
     );
   }
 
-  /* ───────────── DASHBOARD ───────────── */
+  /* ─── DASHBOARD ─── */
+
   if (stage.kind === "dashboard") {
-    const { progress, uiLang } = stage.data;
-    const totalPhrases = progress.reduce((sum, p) => sum + p.current_n, 0);
-    const totalWords = progress.reduce((sum, p) => sum + p.learned_word_count, 0);
-
-    async function handleStartFromDashboard() {
-      if (sourceLang === targetLang) {
-        setError("Pick two different languages.");
-        return;
-      }
-      await startSession();
-    }
-
+    const { progress } = stage.data;
     return (
+      <>
       <Page>
         <Masthead user={session?.user} />
         <div className="flex-1 overflow-y-auto">
-          {/* Welcome header */}
           <div className="px-10 lg:px-14 pt-12 pb-8 border-b border-rule">
             <div className="eyebrow text-terracotta mb-3">Dashboard</div>
             <h1 className="font-serif text-[42px] md:text-[48px] leading-[1.05] tracking-[-0.02em]">
               {session?.user?.name ? (
                 <>
-                  Welcome back,
-                  <br />
-                  <span className="italic text-terracotta">{session.user.name.split(" ")[0]}</span>.
+                  Welcome back,{" "}
+                  <span className="italic text-terracotta">
+                    {session.user.name.split(" ")[0]}
+                  </span>
+                  .
                 </>
               ) : (
                 "Welcome back."
               )}
             </h1>
-            {session?.user?.email && (
-              <p className="text-[13px] text-ink-3 mt-2">{session.user.email}</p>
-            )}
-
-            {/* Stat cards */}
-            <div className="mt-8 grid grid-cols-3 gap-px bg-rule rounded-2xl overflow-hidden border border-rule max-w-[640px]">
-              <div className="bg-paper px-5 py-4">
-                <div className="font-serif text-3xl leading-none">{progress.length}</div>
-                <div className="eyebrow mt-2">Languages</div>
-              </div>
-              <div className="bg-paper px-5 py-4">
-                <div className="font-serif text-3xl leading-none">{totalPhrases}</div>
-                <div className="eyebrow mt-2">Phrases</div>
-              </div>
-              <div className="bg-paper px-5 py-4">
-                <div className="font-serif text-3xl leading-none">{totalWords}</div>
-                <div className="eyebrow mt-2">Words</div>
-              </div>
-            </div>
           </div>
 
-          {/* Language progress table */}
+          {/* In-progress languages */}
           <div className="px-10 lg:px-14 py-9 border-b border-rule">
-            <div className="flex items-baseline justify-between mb-5">
-              <div>
-                <div className="eyebrow text-good">● Your languages</div>
-                <h2 className="font-serif text-2xl mt-1">In progress</h2>
-              </div>
-              <div className="text-[11.5px] text-ink-3">{progress.length} active</div>
-            </div>
-
+            <div className="eyebrow text-good mb-5">● In progress</div>
             {progress.length === 0 ? (
-              <div className="bg-paper border border-rule rounded-2xl px-6 py-10 text-center">
-                <p className="font-serif text-2xl mb-1">Nothing started yet.</p>
-                <p className="text-[13px] text-ink-3">Pick a language below to begin.</p>
-              </div>
+              <p className="text-[13px] text-ink-3 italic">
+                Nothing started yet — start a new language below.
+              </p>
             ) : (
               <div className="space-y-3">
                 {progress.map((p) => {
                   const lvl = LEVELS.find((l) => l.code === p.level);
                   const target = lvl?.targetWords ?? 1;
-                  const pct = Math.min(100, Math.round((p.learned_word_count / target) * 100));
-                  const remaining = Math.max(0, target - p.learned_word_count);
-                  const srcLabel = LANGUAGES.find((l) => l.code === p.source_lang)?.label ?? p.source_lang;
-                  const tgtLabel = LANGUAGES.find((l) => l.code === p.target_lang)?.label ?? p.target_lang;
+                  const pct = Math.min(
+                    100,
+                    Math.round((p.learned_word_count / target) * 100),
+                  );
+                  const srcLabel =
+                    LANGUAGES.find((l) => l.code === p.source_lang)?.label ?? p.source_lang;
+                  const tgtLabel =
+                    LANGUAGES.find((l) => l.code === p.target_lang)?.label ?? p.target_lang;
                   return (
                     <div
                       key={`${p.source_lang}-${p.target_lang}-${p.level}`}
@@ -611,7 +483,9 @@ export default function Home() {
                           {srcLabel} <span className="text-ink-3">→</span>{" "}
                           <span className="italic text-terracotta">{tgtLabel}</span>
                         </div>
-                        <span className="font-mono text-[11px] text-ink-3 uppercase">{p.level}</span>
+                        <span className="font-mono text-[11px] text-ink-3 uppercase">
+                          {p.level}
+                        </span>
                       </div>
                       <div className="text-[12.5px] text-ink-2 tabular mb-3 flex flex-wrap gap-x-4 gap-y-1">
                         <span>
@@ -622,33 +496,22 @@ export default function Home() {
                           <span className="text-ink font-medium">{p.learned_word_count}</span>
                           <span className="text-ink-3"> / {target.toLocaleString()} words</span>
                         </span>
-                        <span>
-                          <span className="text-terracotta font-medium">{remaining.toLocaleString()}</span>
-                          <span className="text-ink-3"> to go</span>
-                        </span>
-                        <span className="ml-auto font-mono text-ink">{pct}%</span>
+                        {p.block_count > 0 && (
+                          <span>
+                            <span className="text-ink font-medium">
+                              {p.completed_block_count}
+                            </span>
+                            <span className="text-ink-3"> / {p.block_count} blocks done</span>
+                          </span>
+                        )}
                       </div>
-                      <div className="h-1.5 bg-rule rounded-full overflow-hidden">
+                      <div className="h-1.5 bg-rule rounded-full overflow-hidden mb-3">
                         <div
                           className="h-full bg-ink rounded-full"
                           style={{ width: `${pct}%` }}
                         />
                       </div>
-                      {p.block_count > 0 && (
-                        <div className="mt-3 text-[11.5px] text-ink-3 flex flex-wrap gap-x-3">
-                          <span>
-                            <span className="text-ink font-medium">
-                              {p.completed_block_count}
-                            </span>
-                            <span> / {p.block_count} blocks done</span>
-                          </span>
-                          {p.active_block_description && (
-                            <span className="italic">
-                              In progress: &ldquo;{p.active_block_description}&rdquo;
-                            </span>
-                          )}
-                        </div>
-                      )}
+                      <div className="flex items-center gap-2 flex-wrap">
                       <button
                         onClick={async () => {
                           setSourceLang(p.source_lang as LanguageCode);
@@ -656,10 +519,36 @@ export default function Home() {
                           setLevel(p.level as LevelCode);
                           await startSession();
                         }}
-                        className="mt-3 text-[12px] text-terracotta hover:text-ink-2 font-medium inline-flex items-center gap-1"
+                        className="text-[12px] text-terracotta hover:text-ink-2 font-medium inline-flex items-center gap-1"
                       >
-                        {p.active_block_description ? "Continue" : "New block"} →
+                        {p.active_block_description
+                          ? `Continue "${p.active_block_description}"`
+                          : "New block"}{" "}
+                        →
                       </button>
+                      {p.learned_word_count > 0 && (
+                        <button
+                          onClick={async () => {
+                            if (wordsModal?.loading) return;
+                            const src = p.source_lang;
+                            const tgt = p.target_lang;
+                            const lvl = p.level;
+                            setWordsModal({ source: src, target: tgt, level: lvl, words: [], count: 0, loading: true });
+                            try {
+                              const res = await fetch(`/api/known-words?source=${src}&target=${tgt}&level=${lvl}`);
+                              if (!res.ok) throw new Error();
+                              const data = (await res.json()) as KnownWordsData;
+                              setWordsModal({ source: src, target: tgt, level: lvl, words: data.words, count: data.count, loading: false });
+                            } catch {
+                              setWordsModal(null);
+                            }
+                          }}
+                          className="text-[12px] text-ink-2 hover:text-ink font-medium inline-flex items-center gap-1"
+                        >
+                          View words ({p.learned_word_count})
+                        </button>
+                      )}
+                      </div>
                     </div>
                   );
                 })}
@@ -667,11 +556,10 @@ export default function Home() {
             )}
           </div>
 
-          {/* Start a new language */}
-          <div className="px-10 lg:px-14 py-9 border-b border-rule">
+          {/* Start new */}
+          <div className="px-10 lg:px-14 py-9">
             <div className="eyebrow text-terracotta mb-1">+ New</div>
             <h2 className="font-serif text-2xl mb-5">Start a new language</h2>
-
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4 max-w-[640px]">
               <FieldRow label="I speak">
                 <SelectField
@@ -689,38 +577,19 @@ export default function Home() {
                 />
               </FieldRow>
             </div>
-
             <div className="mt-2 max-w-[640px]">
               <FieldRow label="Level" last>
                 <LevelStrip active={level} onPick={setLevel} />
               </FieldRow>
             </div>
-
             {error && <p className="text-bad text-sm mt-3">{error}</p>}
-
-            <button onClick={handleStartFromDashboard} className={`${PRIMARY_BTN} mt-5`}>
+            <button
+              onClick={() => { void startSession(); }}
+              className={`${PRIMARY_BTN} mt-5`}
+            >
               Begin session
               <ArrowRight />
             </button>
-          </div>
-
-          {/* Settings */}
-          <div className="px-10 lg:px-14 py-9">
-            <div className="eyebrow mb-1">Settings</div>
-            <h2 className="font-serif text-2xl mb-5">Preferences</h2>
-
-            <div className="max-w-[440px]">
-              <FieldRow label="Interface language" last>
-                <SelectField
-                  value={uiLang}
-                  onChange={(v) => saveUiLang(v)}
-                  options={LANGUAGES}
-                />
-              </FieldRow>
-              <p className="text-[11.5px] text-ink-3 mt-2">
-                Preference is saved to your account. Full UI translation is coming soon.
-              </p>
-            </div>
           </div>
         </div>
         <Footer
@@ -735,83 +604,90 @@ export default function Home() {
           }
         />
       </Page>
+
+      {wordsModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+          <div className="absolute inset-0 bg-black/30" onClick={() => setWordsModal(null)} />
+          <div className="relative bg-paper border border-rule rounded-2xl shadow-2xl w-full max-w-[560px] max-h-[80vh] flex flex-col">
+            <div className="flex items-baseline justify-between px-6 pt-5 pb-3 border-b border-rule">
+              <div>
+                <div className="eyebrow mb-1">Words learned</div>
+                <div className="font-serif text-[20px] text-ink">
+                  {LANGUAGES.find((l) => l.code === wordsModal.source)?.label ?? wordsModal.source}
+                  {" "}→{" "}
+                  <span className="italic text-terracotta">
+                    {LANGUAGES.find((l) => l.code === wordsModal.target)?.label ?? wordsModal.target}
+                  </span>
+                  {" · "}{wordsModal.level}
+                </div>
+              </div>
+              <span className="font-mono text-[13px] text-ink-3">
+                {wordsModal.loading ? "..." : wordsModal.count}
+              </span>
+            </div>
+            <div className="flex-1 overflow-y-auto px-6 py-4">
+              {wordsModal.loading ? (
+                <div className="flex justify-center py-8">
+                  <p className="eyebrow">Loading words…</p>
+                </div>
+              ) : wordsModal.words.length === 0 ? (
+                <p className="text-[13px] text-ink-3 italic">No words learned yet.</p>
+              ) : (
+                <div className="flex flex-wrap gap-2">
+                  {wordsModal.words.map((w) => (
+                    <span
+                      key={w}
+                      className="text-[13px] text-ink bg-cream border border-rule px-2.5 py-1 rounded-full font-medium"
+                    >
+                      {w}
+                    </span>
+                  ))}
+                </div>
+              )}
+            </div>
+            <div className="px-6 py-3 border-t border-rule text-right">
+              <button
+                onClick={() => setWordsModal(null)}
+                className="text-[12px] text-ink-2 hover:text-ink underline underline-offset-2"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </>
     );
   }
 
-  /* ───────────── PICKER ───────────── */
-  if (stage.kind === "picker") {
+  /* ─── BLOCK CREATE ─── */
+
+  if (stage.kind === "block-create") {
+    return (
+      <BlockCreateView
+        sourceLabel={LANGUAGES.find((l) => l.code === sourceLang)?.label}
+        targetLabel={LANGUAGES.find((l) => l.code === targetLang)?.label}
+        level={level}
+        submitting={stage.submitting}
+        error={stage.error}
+        onSubmit={submitBlockCreate}
+        onBack={() => setStage({ kind: "dashboard-loading" })}
+        user={session?.user}
+      />
+    );
+  }
+
+  /* ─── LOADING ─── */
+
+  if (stage.kind === "loading") {
     return (
       <Page>
         <Masthead user={session?.user} />
-        <div className="flex-1 grid grid-cols-1 lg:grid-cols-[1.15fr_1fr]">
-          {/* Editorial hero */}
-          <div className="px-10 lg:px-14 py-14 flex flex-col justify-between lg:border-r border-rule">
-            <div>
-              <div className="eyebrow mb-4">Begin</div>
-              <h1 className="font-serif text-[56px] md:text-[64px] leading-[1.02] tracking-[-0.02em] m-0">
-                Learn a language,
-                <br />
-                <span className="italic text-terracotta">one phrase</span> at a time.
-              </h1>
-              <p className="mt-6 text-[14.5px] leading-[1.6] text-ink-2 max-w-[380px]">
-                Two to five words. Repeat the window of phrases you already know, then earn the next one. A single mistake resets the window — so type carefully.
-              </p>
-            </div>
-            <div className="flex gap-7 pt-6">
-              <Stat n="2–5" l="Words per phrase" />
-              <Stat n="20" l="Window size" />
-              <Stat n="5" l="Languages" />
-            </div>
-          </div>
-
-          {/* Form */}
-          <div className="px-10 lg:px-12 py-11 flex flex-col justify-center">
-            <FieldRow label="I speak">
-              <SelectField value={sourceLang} onChange={(v) => setSourceLang(v as LanguageCode)} options={LANGUAGES} />
-            </FieldRow>
-            <FieldRow label="I want to learn">
-              <SelectField value={targetLang} onChange={(v) => setTargetLang(v as LanguageCode)} options={LANGUAGES} accent />
-            </FieldRow>
-            <FieldRow label="Level" last>
-              <LevelStrip active={level} onPick={setLevel} />
-            </FieldRow>
-
-            {error && <p className="text-bad text-sm mt-4">{error}</p>}
-
-            <button onClick={startSession} className={`${PRIMARY_BTN} mt-7 w-full`}>
-              Continue
-              <ArrowRight />
-            </button>
-
-            <p className="mt-3.5 text-[11.5px] text-ink-3 text-center">
-              Anonymous · your progress is saved in this browser.
-            </p>
-          </div>
-        </div>
-        <Footer
-          left={<span>A quiet way to learn — phrase by phrase.</span>}
-          right={
-            <>
-              <span>Press</span>
-              <Kbd>↵</Kbd>
-              <span>to continue</span>
-            </>
-          }
-        />
-      </Page>
-    );
-  }
-
-  /* ───────────── LOADING ───────────── */
-  if (stage.kind === "loading" || stage.kind === "generating") {
-    return (
-      <Page>
-        <Masthead sessionInfo={undefined} user={session?.user} />
         <div className="flex-1 grid place-items-center px-9">
           <div className="text-center">
-            <div className="eyebrow text-terracotta">{stage.kind === "loading" ? "Loading" : "Generating"}</div>
+            <div className="eyebrow text-terracotta">Loading</div>
             <p className="font-serif text-[36px] mt-3 leading-tight">
-              {stage.kind === "loading" ? "Reaching for your phrases…" : "Writing a new phrase for you…"}
+              Reaching for your phrases…
             </p>
             <div className="mt-6 flex justify-center gap-1.5">
               {[0, 1, 2].map((i) => (
@@ -828,176 +704,181 @@ export default function Home() {
     );
   }
 
-  /* ───────────── READY ───────────── */
-  if (stage.kind === "ready") {
-    const s = stage.state;
-    const windowLen = s.window.length;
+  /* ─── SESSION ─── */
+
+  if (stage.kind === "session") {
+    const sourceLabel = LANGUAGES.find((l) => l.code === sourceLang)?.label ?? sourceLang;
+    const targetLabel = LANGUAGES.find((l) => l.code === targetLang)?.label ?? targetLang;
+    const currentPhrase = stage.phrases.find((p) => p.phrase_index > stage.currentN);
+    const doneCount = stage.phrases.filter((p) => p.phrase_index <= stage.currentN).length;
+    const totalCount = stage.phrases.length;
+
     return (
       <Page>
-        <Masthead sessionInfo={sessionInfo(s)} onChange={reset} user={session?.user} />
-        <div className="flex-1 grid place-items-center px-9 py-10">
-          <div className="w-full max-w-[680px] text-center">
-            <div className="eyebrow text-terracotta">Ready</div>
-            {s.currentN === 0 ? (
-              <>
-                <h2 className="font-serif text-[44px] md:text-[48px] leading-[1.05] tracking-[-0.02em] mt-3.5 mb-2">
-                  Your first phrase in <span className="italic">{targetLabel}</span> awaits.
-                </h2>
-                <p className="text-sm text-ink-2 leading-relaxed max-w-[480px] mx-auto mb-8">
-                  Tap continue and we&apos;ll generate phrase № 1.
-                </p>
-              </>
-            ) : (
-              <>
-                <h2 className="font-serif text-[44px] md:text-[48px] leading-[1.05] tracking-[-0.02em] mt-3.5 mb-2">
-                  Repeat <span className="text-terracotta">{windowLen} {windowLen === 1 ? "phrase" : "phrases"}</span>,
-                  <br />
-                  then earn phrase <span className="italic">№{s.currentN + 1}</span>.
-                </h2>
-                <p className="text-sm text-ink-2 leading-relaxed max-w-[480px] mx-auto mb-8">
-                  A single mistake resets the window to phrase one. Slow down. Breathe.
-                </p>
+        <Masthead
+          sessionInfo={{
+            pair: `${sourceLabel} → ${targetLabel} · ${level}`,
+            done: doneCount,
+            total: totalCount,
+          }}
+          onChange={reset}
+          user={session?.user}
+        />
 
-                {windowLen > 0 && (
-                  <div className="bg-paper border border-rule rounded-2xl px-5 py-4 mb-8 text-left flex items-center gap-4">
-                    <div>
-                      <div className="eyebrow">Window</div>
-                      <div className="font-serif text-2xl mt-0.5 leading-none">
-                        {s.window[0].phrase_index} → {s.window[windowLen - 1].phrase_index}
+        <div className="flex-1 grid grid-cols-1 lg:grid-cols-[1.4fr_1fr] min-h-0 overflow-hidden">
+          {/* Left: current phrase + input */}
+          <div className="px-10 lg:px-12 py-10 flex flex-col lg:border-r border-rule">
+            {currentPhrase ? (
+              <>
+                <div className="flex items-center justify-between mb-6">
+                  <div className="eyebrow">
+                    Phrase {doneCount + 1} of {totalCount}
+                  </div>
+                  <BlockDots done={doneCount} total={totalCount} />
+                </div>
+
+                {stage.mistake ? (
+                  <div className="mt-2">
+                    <div className="eyebrow text-bad mb-2">● Not quite</div>
+                    <div className="text-[13px] text-ink-3 mb-1">
+                      {currentPhrase.source_text}
+                    </div>
+                    <div className="font-serif text-[38px] leading-[1.12] tracking-[-0.015em] text-ink mb-4">
+                      {stage.mistake.correct}
+                    </div>
+                    {(stage.wrongByPhrase[currentPhrase.phrase_index] ?? []).map((w, i) => (
+                      <div key={i} className="font-mono text-[13px] text-bad line-through">
+                        {w || "(empty)"}
                       </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="mt-2">
+                    <div className="eyebrow mb-2">{sourceLabel}</div>
+                    <div className="font-serif text-[42px] md:text-[46px] leading-[1.12] tracking-[-0.015em] text-ink">
+                      {currentPhrase.source_text}
                     </div>
-                    <div className="w-px h-8 bg-rule" />
-                    <div className="flex-1 flex gap-[3px] items-end h-8">
-                      {Array.from({ length: windowLen }).map((_, i) => (
-                        <div
-                          key={i}
-                          className="flex-1 bg-ink rounded-[1.5px]"
-                          style={{
-                            height: 6 + (i % 5) * 4 + Math.sin(i) * 3,
-                            opacity: 0.35 + i / 30,
-                          }}
-                        />
-                      ))}
-                    </div>
-                    <div className="font-mono text-[11px] text-ink-3">{windowLen} / 20</div>
                   </div>
                 )}
-              </>
-            )}
 
-            <button onClick={beginSession} className={PRIMARY_BTN}>
-              {s.currentN === 0 ? "Generate first phrase" : "Begin session"}
-              <ArrowRight />
-            </button>
-          </div>
-        </div>
-        <Footer
-          left={
-            <>
-              Tip: <Kbd>↵</Kbd>
-              <span>submits</span>
-            </>
-          }
-          right={<span>Session #{s.currentN + 1}</span>}
-        />
-      </Page>
-    );
-  }
-
-  /* ───────────── REPEATING ───────────── */
-  if (stage.kind === "repeating") {
-    const current = stage.state.window[stage.index];
-    const answered = stage.state.window.slice(0, stage.index);
-    const currentWrongs = stage.wrongByPhrase[current.phrase_index] ?? [];
-
-    return (
-      <Page>
-        <Masthead sessionInfo={sessionInfo(stage.state)} onChange={reset} user={session?.user} />
-
-        <div className="flex-1 grid grid-cols-1 lg:grid-cols-[1.45fr_1fr]">
-          {/* Prompt */}
-          <div className="px-10 lg:px-12 py-10 flex flex-col lg:border-r border-rule">
-            <div className="flex items-center justify-between mb-6">
-              <div className="eyebrow">
-                Phrase {stage.index + 1} of {stage.state.window.length}
-              </div>
-              <ProgressDots total={stage.state.window.length} done={stage.index} active={stage.index} />
-            </div>
-
-            {stage.mistake ? (
-              <div className="mt-2">
-                <div className="eyebrow text-bad mb-2">● Not quite</div>
-                <div className="text-[13px] text-ink-3 mb-1">{current.source_text}</div>
-                <div className="font-serif text-[38px] leading-[1.12] tracking-[-0.015em] text-ink mb-4">
-                  {stage.mistake.correct}
-                </div>
-                {currentWrongs.map((w, i) => (
-                  <div key={i} className="font-mono text-[13px] text-bad line-through">
-                    {w || "(empty)"}
+                <form
+                  onSubmit={(e) => {
+                    e.preventDefault();
+                    void submitAnswer();
+                  }}
+                  className="mt-auto pt-8"
+                >
+                  <div className="eyebrow mb-2.5">
+                    {stage.mistake
+                      ? "Type the correct answer to continue"
+                      : `Type in ${targetLabel}`}
                   </div>
-                ))}
-              </div>
+                  <label className={INPUT_WRAP}>
+                    <input
+                      ref={inputRef}
+                      value={input}
+                      onChange={(e) => setInput(e.target.value)}
+                      placeholder={
+                        stage.mistake
+                          ? "Type the answer above…"
+                          : `Type in ${targetLabel}…`
+                      }
+                      className="font-serif text-[22px] text-ink flex-1 bg-transparent outline-none placeholder:text-ink-3 placeholder:italic leading-tight"
+                      disabled={stage.submitting}
+                      autoFocus
+                    />
+                    <span className="font-mono text-[11px] text-ink-3">↵</span>
+                  </label>
+                  <button
+                    type="submit"
+                    disabled={!input.trim() || stage.submitting}
+                    className="sr-only"
+                  >
+                    Submit
+                  </button>
+                </form>
+              </>
             ) : (
-              <div className="mt-2">
-                <div className="eyebrow mb-2">{sourceLabel}</div>
-                <div className="font-serif text-[42px] md:text-[46px] leading-[1.12] tracking-[-0.015em] text-ink">
-                  {current.source_text}
-                </div>
+              <div className="flex-1 grid place-items-center">
+                <p className="eyebrow text-good">All phrases answered</p>
               </div>
             )}
-
-            <form
-              onSubmit={(e) => {
-                e.preventDefault();
-                submitRepetition();
-              }}
-              className="mt-auto"
-            >
-              <div className="eyebrow mb-2.5">
-                {stage.mistake ? "Type the correct answer to continue" : `Type in ${targetLabel}`}
-              </div>
-              <label className={INPUT_WRAP}>
-                <input
-                  ref={inputRef}
-                  value={input}
-                  onChange={(e) => setInput(e.target.value)}
-                  placeholder={stage.mistake ? "Type the answer above…" : `Type in ${targetLabel}…`}
-                  className="font-serif text-[22px] text-ink flex-1 bg-transparent outline-none placeholder:text-ink-3 placeholder:italic leading-tight"
-                  autoFocus
-                />
-                <span className="font-mono text-[11px] text-ink-3">↵</span>
-              </label>
-              <button type="submit" disabled={!input.trim()} className="sr-only">
-                Submit
-              </button>
-            </form>
           </div>
 
-          {/* Answered list */}
-          <div className="px-9 py-9 flex flex-col overflow-hidden">
-            <div className="flex items-baseline justify-between mb-3.5">
-              <div className="eyebrow text-good">● Answered</div>
-              <span className="font-mono text-[11px] text-ink-3">
-                {answered.length} / {stage.state.window.length}
-              </span>
+          {/* Right: block phrase list */}
+          <div className="px-7 py-8 flex flex-col min-h-0 overflow-hidden">
+            <div className="mb-4 flex-shrink-0">
+              <div className="eyebrow text-terracotta mb-1">Block</div>
+              <div className="font-serif text-[17px] leading-tight text-ink">
+                &ldquo;{stage.block.description}&rdquo;
+              </div>
             </div>
 
-            {answered.length === 0 ? (
-              <p className="text-[12.5px] text-ink-3 italic">Your answered phrases will appear here.</p>
-            ) : (
-              <div className="flex flex-col gap-2.5 overflow-y-auto">
-                {answered.map((p) => (
-                  <AnsweredRow key={p.phrase_index} p={p} wrongs={stage.wrongByPhrase[p.phrase_index] ?? []} />
-                ))}
-              </div>
-            )}
+            <div className="flex-1 overflow-y-auto space-y-1.5 pr-1">
+              {stage.phrases.map((phrase) => {
+                const isDone = phrase.phrase_index <= stage.currentN;
+                const isCurrent = currentPhrase?.phrase_index === phrase.phrase_index;
+                const wrongs = stage.wrongByPhrase[phrase.phrase_index] ?? [];
+
+                if (isDone) {
+                  return (
+                    <div
+                      key={phrase.phrase_index}
+                      className="px-3 py-2.5 rounded-xl border border-good/30 bg-good-soft"
+                    >
+                      <div className="text-[11px] text-ink-3 mb-0.5">{phrase.source_text}</div>
+                      <div className="font-serif text-[15px] text-ink leading-tight">
+                        {phrase.target_text}
+                      </div>
+                      {phrase.new_words.length > 0 && (
+                        <div className="flex flex-wrap gap-1 mt-1">
+                          {phrase.new_words.map((w) => (
+                            <span key={w} className="text-[10px] text-good bg-good/10 px-1.5 py-[1px] rounded-full font-medium">
+                              {w}
+                            </span>
+                          ))}
+                        </div>
+                      )}
+                      {wrongs.map((w, i) => (
+                        <div key={i} className="font-mono text-[10px] text-bad line-through mt-0.5">
+                          {w}
+                        </div>
+                      ))}
+                    </div>
+                  );
+                }
+
+                if (isCurrent) {
+                  return (
+                    <div
+                      key={phrase.phrase_index}
+                      className="px-3 py-2.5 rounded-xl border border-terracotta bg-terracotta-soft"
+                    >
+                      <div className="eyebrow text-terracotta text-[10px] mb-0.5">● Now</div>
+                      <div className="text-[13px] text-ink leading-tight">
+                        {phrase.source_text}
+                      </div>
+                    </div>
+                  );
+                }
+
+                return (
+                  <div
+                    key={phrase.phrase_index}
+                    className="px-3 py-2 rounded-xl border border-rule opacity-30"
+                  >
+                    <div className="eyebrow text-[10px]">#{phrase.phrase_index}</div>
+                  </div>
+                );
+              })}
+            </div>
           </div>
         </div>
 
         <Footer
           left={
             stage.mistake ? (
-              <span className="text-bad">● Window will reset to phrase 1</span>
+              <span className="text-bad">● Type the correct answer to continue</span>
             ) : (
               <>
                 <Kbd>↵</Kbd>
@@ -1005,146 +886,66 @@ export default function Home() {
               </>
             )
           }
-          right={<span>Window resets on any mistake.</span>}
-        />
-      </Page>
-    );
-  }
-
-  /* ───────────── NEW PHRASE ───────────── */
-  if (stage.kind === "new-phrase") {
-    const p = stage.phrase;
-    return (
-      <Page>
-        <Masthead sessionInfo={sessionInfo(stage.state)} onChange={reset} user={session?.user} />
-        <div className="flex-1 grid place-items-center px-9 py-8">
-          <div className="w-full max-w-[700px] text-center">
-            <div className="eyebrow text-terracotta">✦ New phrase № {p.phrase_index}</div>
-
-            <div className="mt-5 mb-1.5 text-[13px] text-ink-3">{sourceLabel}</div>
-            <div className="font-serif text-[28px] md:text-[30px] leading-[1.15] text-ink-2 italic">
-              &ldquo;{p.source_text}&rdquo;
-            </div>
-
-            <div className="flex items-center justify-center gap-3.5 my-6">
-              <div className="h-px w-[60px] bg-rule" />
-              <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
-                <path d="M6 1V11 M1 6L6 11L11 6" stroke="#8A8278" strokeWidth="1" strokeLinecap="round" />
-              </svg>
-              <div className="h-px w-[60px] bg-rule" />
-            </div>
-
-            <div className="text-[13px] text-ink-3">{targetLabel}</div>
-            <div className="font-serif text-[44px] md:text-[54px] leading-[1.05] tracking-[-0.02em] text-ink mt-1.5">
-              {p.target_text}
-            </div>
-
-            {p.new_words.length > 0 && (
-              <div className="flex justify-center gap-2 mt-6 flex-wrap items-center">
-                <span className="eyebrow mr-1">New</span>
-                {p.new_words.map((w) => (
-                  <span
-                    key={w}
-                    className="text-[13px] text-terracotta bg-terracotta-soft border border-terracotta px-2.5 py-1 rounded-full"
-                  >
-                    {w}
-                  </span>
-                ))}
-              </div>
-            )}
-
-            {stage.wrongAttempts.length > 0 && (
-              <div className="mt-5">
-                <div className="eyebrow text-bad mb-1.5">● Try again</div>
-                {stage.wrongAttempts.map((w, i) => (
-                  <div key={i} className="font-mono text-[13px] text-bad line-through">
-                    {w || "(empty)"}
-                  </div>
-                ))}
-              </div>
-            )}
-
-            <form
-              onSubmit={(e) => {
-                e.preventDefault();
-                submitNewPhrase();
-              }}
-              className="mt-7 text-left"
-            >
-              <label className={INPUT_WRAP}>
-                <input
-                  ref={inputRef}
-                  value={input}
-                  onChange={(e) => setInput(e.target.value)}
-                  placeholder="Type the new phrase to lock it in…"
-                  className="font-serif text-[22px] text-ink flex-1 bg-transparent outline-none placeholder:text-ink-3 placeholder:italic leading-tight"
-                  autoFocus
-                />
-                <span className="font-mono text-[11px] text-ink-3">↵ Confirm</span>
-              </label>
-              <button type="submit" disabled={!input.trim()} className="sr-only">
-                Confirm
-              </button>
-            </form>
-          </div>
-        </div>
-        <Footer
-          left={<span>Generated for level <span className="text-ink-2">{level}</span></span>}
           right={
-            <>
-              <span>Type to lock in</span>
-              <Kbd>↵</Kbd>
-            </>
+            <span>
+              {doneCount} / {totalCount} done
+            </span>
           }
         />
       </Page>
     );
   }
 
-  /* ───────────── DONE ───────────── */
-  if (stage.kind === "done") {
-    const s = stage.state;
-    const p = stage.lastPhrase;
+  /* ─── BLOCK DONE ─── */
+
+  if (stage.kind === "block-done") {
     return (
       <Page>
-        <Masthead sessionInfo={sessionInfo(s)} onChange={reset} user={session?.user} />
-        <div className="flex-1 grid place-items-center px-9 py-9">
-          <div className="w-full max-w-[680px] text-center">
-            <div className="eyebrow text-terracotta">Session complete</div>
-            <h2 className="font-serif text-[56px] md:text-[60px] leading-[1.02] tracking-[-0.02em] mt-4 mb-1">
-              Phrase <span className="italic text-terracotta">№{p.phrase_index}</span>
-              <br />
-              is yours.
-            </h2>
-            <p className="text-[14.5px] text-ink-2 leading-snug mt-4 mx-auto max-w-[440px]">
-              <span className="font-serif text-[18px]">&ldquo;{p.target_text}&rdquo;</span>
-              <br />
-              <span className="text-ink-3 text-[12.5px]">{p.source_text}</span>
+        <Masthead user={session?.user} />
+        <div className="flex-1 overflow-y-auto">
+          <div className="px-10 lg:px-14 pt-12 pb-8 border-b border-rule">
+            <div className="eyebrow text-good mb-3">✦ Block complete</div>
+            <h1 className="font-serif text-[44px] md:text-[52px] leading-[1.05] tracking-[-0.02em] mb-2">
+              &ldquo;
+              <span className="italic text-terracotta">{stage.block.description}</span>
+              &rdquo; done.
+            </h1>
+            <p className="text-[14px] text-ink-2">
+              {stage.phrases.length} phrases learned in this block.
             </p>
-
-            <div className="mt-9 grid grid-cols-3 bg-paper border border-rule rounded-2xl overflow-hidden">
-              <Totals n={String(p.phrase_index)} l="Phrases" />
-              <Totals
-                n={String(s.learnedWordCount)}
-                l="Words learned"
-                sub={`/ ${s.targetWordCount.toLocaleString()}`}
-              />
-              <Totals n={level} l="Level" accent last />
-            </div>
-
-            <button onClick={loadState} className={`${PRIMARY_BTN} mt-8`}>
-              Start next session
+            <button
+              onClick={() => setStage({ kind: "block-create", submitting: false, error: null })}
+              className={`${PRIMARY_BTN} mt-7`}
+            >
+              Create next block
               <ArrowRight />
             </button>
           </div>
+
+          <div className="px-10 lg:px-14 py-9">
+            <div className="eyebrow mb-4">Phrases in this block</div>
+            <div className="space-y-2 max-w-[640px]">
+              {stage.phrases.map((p) => (
+                <div
+                  key={p.phrase_index}
+                  className="px-4 py-3 bg-paper border border-rule rounded-xl flex items-baseline justify-between gap-4"
+                >
+                  <div className="text-[13px] text-ink-3 shrink-0">{p.source_text}</div>
+                  <div className="font-serif text-[17px] text-ink text-right">{p.target_text}</div>
+                </div>
+              ))}
+            </div>
+          </div>
         </div>
         <Footer
-          left={<span>Saved</span>}
+          left={<span>Block saved to your history.</span>}
           right={
-            <>
-              <Kbd>↵</Kbd>
-              <span>Next session</span>
-            </>
+            <button
+              onClick={() => setStage({ kind: "dashboard-loading" })}
+              className="text-[11px] text-ink-2 hover:text-ink underline underline-offset-2"
+            >
+              Back to dashboard
+            </button>
           }
         />
       </Page>
@@ -1154,7 +955,7 @@ export default function Home() {
   return null;
 }
 
-/* ───────────── Helper components ───────────── */
+/* ─── Helper components ─── */
 
 function Page({ children }: { children: React.ReactNode }) {
   return (
@@ -1166,18 +967,20 @@ function Page({ children }: { children: React.ReactNode }) {
   );
 }
 
-function Stat({ n, l }: { n: string; l: string }) {
+function FieldRow({
+  label,
+  children,
+  last,
+}: {
+  label: string;
+  children: React.ReactNode;
+  last?: boolean;
+}) {
   return (
-    <div>
-      <div className="font-serif text-3xl leading-none text-ink">{n}</div>
-      <div className="eyebrow mt-1.5">{l}</div>
-    </div>
-  );
-}
-
-function FieldRow({ label, children, last }: { label: string; children: React.ReactNode; last?: boolean }) {
-  return (
-    <div className={`py-4.5 ${last ? "" : "border-b border-rule"}`} style={{ paddingTop: 18, paddingBottom: 18 }}>
+    <div
+      className={`${last ? "" : "border-b border-rule"}`}
+      style={{ paddingTop: 18, paddingBottom: 18 }}
+    >
       <div className="eyebrow mb-2.5">{label}</div>
       {children}
     </div>
@@ -1210,8 +1013,20 @@ function SelectField({
           </option>
         ))}
       </select>
-      <svg width="12" height="12" viewBox="0 0 12 12" fill="none" className="absolute right-4 pointer-events-none">
-        <path d="M3 5L6 8L9 5" stroke="#8A8278" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
+      <svg
+        width="12"
+        height="12"
+        viewBox="0 0 12 12"
+        fill="none"
+        className="absolute right-4 pointer-events-none"
+      >
+        <path
+          d="M3 5L6 8L9 5"
+          stroke="#8A8278"
+          strokeWidth="1.2"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        />
       </svg>
     </div>
   );
@@ -1234,7 +1049,11 @@ function LevelStrip({ active, onPick }: { active: LevelCode; onPick: (l: LevelCo
             }`}
           >
             <div className="font-mono text-[12px] font-medium">{l.code}</div>
-            <div className={`text-[9.5px] mt-0.5 tracking-wide ${isActive ? "text-paper/65" : "text-ink-3"}`}>
+            <div
+              className={`text-[9.5px] mt-0.5 tracking-wide ${
+                isActive ? "text-paper/65" : "text-ink-3"
+              }`}
+            >
               {l.targetWords >= 1000 ? `${l.targetWords / 1000}k` : l.targetWords}
             </div>
           </button>
@@ -1244,48 +1063,18 @@ function LevelStrip({ active, onPick }: { active: LevelCode; onPick: (l: LevelCo
   );
 }
 
-function ProgressDots({ total, done, active }: { total: number; done: number; active: number }) {
+function BlockDots({ done, total }: { done: number; total: number }) {
   return (
     <div className="flex gap-[3px]">
-      {Array.from({ length: total }).map((_, i) => {
-        const isDone = i < done;
-        const isActive = i === active;
-        return (
-          <div
-            key={i}
-            className={`h-1.5 rounded-[3px] transition-all duration-200 ${
-              isDone ? "bg-ink" : isActive ? "bg-terracotta" : "bg-rule"
-            }`}
-            style={{ width: isActive ? 14 : 6 }}
-          />
-        );
-      })}
-    </div>
-  );
-}
-
-function AnsweredRow({ p, wrongs }: { p: WindowPhrase; wrongs: string[] }) {
-  return (
-    <div className="px-3.5 py-2.5 bg-paper border border-rule rounded-[10px]">
-      <div className="text-[12px] text-ink-3 mb-0.5">{p.source_text}</div>
-      <div className="font-serif text-[17px] text-ink leading-tight">{p.target_text}</div>
-      {wrongs.map((w, i) => (
-        <div key={i} className="font-mono text-[11px] text-bad line-through mt-0.5">
-          {w || "(empty)"}
-        </div>
+      {Array.from({ length: total }).map((_, i) => (
+        <div
+          key={i}
+          className={`h-1.5 rounded-[3px] transition-all duration-200 ${
+            i < done ? "bg-good" : i === done ? "bg-terracotta" : "bg-rule"
+          }`}
+          style={{ width: i === done ? 12 : 5 }}
+        />
       ))}
-    </div>
-  );
-}
-
-function Totals({ n, l, sub, accent, last }: { n: string; l: string; sub?: string; accent?: boolean; last?: boolean }) {
-  return (
-    <div className={`px-3.5 py-4.5 ${last ? "" : "border-r border-rule"}`} style={{ paddingTop: 18, paddingBottom: 18 }}>
-      <div className={`font-serif text-3xl leading-none ${accent ? "text-terracotta" : "text-ink"}`}>
-        {n}
-        {sub && <span className="text-[13px] text-ink-3 font-mono"> {sub}</span>}
-      </div>
-      <div className="eyebrow mt-2">{l}</div>
     </div>
   );
 }
@@ -1325,11 +1114,12 @@ function BlockCreateView({
 
           <div className="eyebrow text-terracotta mb-3">New block</div>
           <h1 className="font-serif text-[44px] leading-[1.05] tracking-[-0.02em] mb-3">
-            What should the next <span className="italic text-terracotta">block</span> teach you?
+            What should the next{" "}
+            <span className="italic text-terracotta">block</span> teach you?
           </h1>
           <p className="text-[14.5px] text-ink-2 leading-[1.6] mb-8">
-            5 phrases in {targetLabel ?? "your target language"} ({level}), generated by AI based on
-            your description and what you don&apos;t know yet.
+            20 phrases in {targetLabel ?? "your target language"} ({level}), generated by AI
+            based on your description.
           </p>
 
           <div className="bg-paper border border-rule rounded-2xl p-6 mb-5">
@@ -1343,8 +1133,7 @@ function BlockCreateView({
               className="w-full bg-cream border border-rule rounded-xl px-4 py-3 text-[15px] text-ink placeholder:text-ink-3 placeholder:italic outline-none focus:border-ink resize-none"
             />
             <p className="text-[11.5px] text-ink-3 mt-2">
-              The AI will pick 5 phrases matching your theme — only using words you don&apos;t
-              already know.
+              AI will generate 20 phrases on your theme.
             </p>
           </div>
 
@@ -1373,13 +1162,13 @@ function BlockCreateView({
           </div>
 
           <p className="text-[11.5px] text-ink-3 mt-5 text-center">
-            Pair: {sourceLabel} → {targetLabel} · Level {level} · 5 phrases per block
+            Pair: {sourceLabel} → {targetLabel} · Level {level} · 20 phrases per block
           </p>
         </div>
       </div>
       <Footer
-        left={<span>Each block is a coherent set of phrases on one theme.</span>}
-        right={<span>~10 seconds to generate</span>}
+        left={<span>Each block is a set of phrases on one theme.</span>}
+        right={<span>~30 seconds to generate</span>}
       />
     </Page>
   );
