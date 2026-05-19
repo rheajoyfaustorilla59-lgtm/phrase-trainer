@@ -17,6 +17,7 @@ import {
 } from "@/lib/telegram";
 import type { LanguageCode, LevelCode } from "@/lib/languages";
 import { LANGUAGES } from "@/lib/languages";
+import { getUserIdByLinkCode, linkTelegramChat, getUserIdByTelegramChat } from "@/lib/session";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -77,10 +78,41 @@ async function handleMessage(chatId: number, text: string) {
   if (lower === "/start") {
     clearUserState(chatId);
     await sendMessage(chatId, randomGreeting());
+
+    // Check if Telegram is linked to a web app account
+    const linkedUserId = await getUserIdByTelegramChat(chatId);
+    if (linkedUserId) {
+      await sendMessage(
+        chatId,
+        "🔗 Your Telegram is linked to your Phrase Trainer account! You can practice directly.\n\nChoose your <b>source language</b>:",
+        languageKeyboard("source"),
+      );
+    } else {
+      await sendMessage(
+        chatId,
+        "🌍 <b>Let's set up your practice!</b>\n\nFirst, choose your <b>source language</b> (the language you speak):",
+        languageKeyboard("source"),
+      );
+    }
+    return;
+  }
+
+  // Handle /link command: /link ABC123
+  if (lower.startsWith("/link ")) {
+    const code = text.slice(6).trim().toUpperCase();
+    if (code.length < 4) {
+      await sendMessage(chatId, "❌ Invalid code. Please use the code from the web app dashboard.");
+      return;
+    }
+    const userId = await getUserIdByLinkCode(code);
+    if (!userId) {
+      await sendMessage(chatId, "❌ Invalid or expired code. Generate a new one from the web app dashboard.");
+      return;
+    }
+    await linkTelegramChat(userId, chatId);
     await sendMessage(
       chatId,
-      "🌍 <b>Let's set up your practice!</b>\n\nFirst, choose your <b>source language</b> (the language you speak):",
-      languageKeyboard("source"),
+      "✅ <b>Telegram linked successfully!</b>\n\nYour Telegram account is now connected to your Phrase Trainer account. You can practice directly here!\n\nType /start to begin. 📚",
     );
     return;
   }
@@ -94,7 +126,7 @@ async function handleMessage(chatId: number, text: string) {
   if (lower === "/help") {
     await sendMessage(
       chatId,
-      "🤖 <b>Phrase Trainer Bot</b>\n\n/start — Start or restart\n/cancel — Cancel current session\n/funny — Tell me a joke",
+      "🤖 <b>Phrase Trainer Bot</b>\n\n/start — Start or restart\n/link CODE — Link to your web app account\n/cancel — Cancel current session\n/funny — Tell me a joke\n\nTo get a linking code, go to the web app dashboard and click 'Link Telegram'.",
     );
     return;
   }

@@ -596,6 +596,48 @@ export async function getBlockPhrases(
   }));
 }
 
+/* ───────────── TELEGRAM LINKING ───────────── */
+
+export async function generateLinkCode(userId: string): Promise<string> {
+  const sql = await getSql();
+  // Generate a random 6-character alphanumeric code
+  const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+  let code = "";
+  for (let i = 0; i < 6; i++) {
+    code += chars[Math.floor(Math.random() * chars.length)];
+  }
+  await sql`UPDATE users SET telegram_link_code = ${code} WHERE id = ${userId}`;
+  return code;
+}
+
+export async function getUserIdByLinkCode(code: string): Promise<string | null> {
+  const sql = await getSql();
+  const rows = (await sql`
+    SELECT id FROM users WHERE telegram_link_code = ${code}
+  `) as Array<{ id: string }>;
+  return rows[0]?.id ?? null;
+}
+
+export async function linkTelegramChat(userId: string, chatId: number): Promise<void> {
+  const sql = await getSql();
+  // Clear any previous link
+  await sql`UPDATE users SET telegram_chat_id = NULL WHERE telegram_chat_id = ${chatId}`;
+  // Link the user
+  await sql`
+    UPDATE users
+    SET telegram_chat_id = ${chatId}, telegram_link_code = NULL
+    WHERE id = ${userId}
+  `;
+}
+
+export async function getUserIdByTelegramChat(chatId: number): Promise<string | null> {
+  const sql = await getSql();
+  const rows = (await sql`
+    SELECT id FROM users WHERE telegram_chat_id = ${chatId}
+  `) as Array<{ id: string }>;
+  return rows[0]?.id ?? null;
+}
+
 export async function deleteLanguage(
   userId: string,
   sourceLang: LanguageCode,

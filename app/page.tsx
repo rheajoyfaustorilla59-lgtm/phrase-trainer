@@ -744,6 +744,18 @@ export default function Home() {
               Begin session
               <ArrowRight />
             </button>
+
+          {/* Link Telegram */}
+          <div className="px-10 lg:px-14 pb-9">
+            <div className="border-t border-rule pt-9 mt-2">
+              <div className="eyebrow text-ink-3 mb-1">🔗 Connect</div>
+              <h2 className="font-serif text-2xl mb-3">Link to Telegram</h2>
+              <p className="text-[13px] text-ink-2 mb-4 max-w-[500px] leading-relaxed">
+                Practice on the go! Link your account to Telegram and practice phrases directly in the chat.
+              </p>
+              <TelegramLinkButton />
+            </div>
+          </div>
           </div>
         </div>
         <Footer
@@ -1304,6 +1316,84 @@ function ShowAnswerButton({
   );
 }
 
+
+function TelegramLinkButton() {
+  const [loading, setLoading] = useState(false);
+  const [linkCode, setLinkCode] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
+
+  async function handleLink() {
+    setLoading(true);
+    setError(null);
+    setLinkCode(null);
+    try {
+      const res = await fetch("/api/telegram-link", { method: "POST" });
+      if (!res.ok) throw new Error("Failed to generate code");
+      const data = await res.json();
+      setLinkCode(data.code);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Something went wrong");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function copyCode() {
+    if (!linkCode) return;
+    try {
+      await navigator.clipboard.writeText(linkCode);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch {}
+  }
+
+  if (linkCode) {
+    return (
+      <div>
+        <div className="bg-amber-soft border border-amber/30 rounded-xl px-5 py-4 mb-3 max-w-[500px]">
+          <div className="eyebrow text-amber mb-2">✨ Your linking code</div>
+          <div className="flex items-center gap-3">
+            <span className="font-mono text-[28px] font-bold tracking-[0.15em] text-ink">
+              {linkCode}
+            </span>
+            <button
+              onClick={copyCode}
+              className="text-[11px] text-ink-2 hover:text-ink underline underline-offset-2 transition-colors"
+            >
+              {copied ? "Copied!" : "Copy"}
+            </button>
+          </div>
+          <p className="text-[12px] text-ink-3 mt-2">
+            Open Telegram and send this command to the bot:
+          </p>
+          <div className="bg-paper border border-rule rounded-lg px-3 py-2 mt-1 font-mono text-[13px] text-ink">
+            /link {linkCode}
+          </div>
+        </div>
+        <button
+          onClick={handleLink}
+          className="text-[11px] text-ink-2 hover:text-ink underline underline-offset-2 transition-colors"
+        >
+          Generate new code
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <div>
+      <button
+        onClick={handleLink}
+        disabled={loading}
+        className="inline-flex items-center gap-2 border border-ink bg-transparent text-ink rounded-full px-5 py-2.5 text-[12px] font-medium hover:bg-ink hover:text-paper transition-colors disabled:opacity-40"
+      >
+        {loading ? "Generating…" : "🔗 Link Telegram"}
+      </button>
+      {error && <p className="text-bad text-[12px] mt-2">{error}</p>}
+    </div>
+  );
+}
 function BlockCreateView({
   sourceLabel,
   targetLabel,

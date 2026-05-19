@@ -87,6 +87,11 @@ async function init(): Promise<void> {
 
   await sql`ALTER TABLE phrases ADD COLUMN IF NOT EXISTS block_id INTEGER`;
   await sql`CREATE INDEX IF NOT EXISTS idx_phrases_block ON phrases (block_id)`;
+
+  // Telegram linking columns
+  await sql`ALTER TABLE users ADD COLUMN IF NOT EXISTS telegram_chat_id BIGINT`;
+  await sql`ALTER TABLE users ADD COLUMN IF NOT EXISTS telegram_link_code TEXT`;
+  await sql`CREATE UNIQUE INDEX IF NOT EXISTS idx_users_telegram_chat ON users(telegram_chat_id)`;
 }
 
 export async function getSql() {
