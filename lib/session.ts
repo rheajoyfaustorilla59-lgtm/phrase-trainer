@@ -140,6 +140,63 @@ export async function getAllKnownWords(
   return [...seen];
 }
 
+export async function deleteKnownWord(
+  userId: string,
+  sourceLang: LanguageCode,
+  targetLang: LanguageCode,
+  level: LevelCode,
+  word: string,
+): Promise<void> {
+  const sql = await getSql();
+
+  // Remove the word from all new_words arrays in phrases
+  const rows = (await sql`
+    SELECT phrase_index, new_words FROM phrases
+    WHERE user_id = ${userId}
+      AND source_lang = ${sourceLang}
+      AND target_lang = ${targetLang}
+      AND level = ${level}
+  `) as Array<{ phrase_index: number; new_words: string }>;
+
+  for (const r of rows) {
+    const words: string[] = JSON.parse(r.new_words);
+    const filtered = words.filter((w) => w !== word);
+    if (filtered.length !== words.length) {
+      await sql`
+        UPDATE phrases SET new_words = ${JSON.stringify(filtered)}
+        WHERE user_id = ${userId}
+          AND source_lang = ${sourceLang}
+          AND target_lang = ${targetLang}
+          AND level = ${level}
+          AND phrase_index = ${r.phrase_index}
+      `;
+    }
+  }
+
+  // Recalculate the total learned_word_count
+  const allRows = (await sql`
+    SELECT target_text FROM phrases
+    WHERE user_id = ${userId}
+      AND source_lang = ${sourceLang}
+      AND target_lang = ${targetLang}
+      AND level = ${level}
+  `) as Array<{ target_text: string }>;
+
+  const seen = new Set<string>();
+  for (const r of allRows) {
+    for (const w of tokenizeWords(r.target_text)) seen.add(w);
+  }
+  const newCount = seen.size;
+
+  await sql`
+    UPDATE user_levels SET learned_word_count = ${newCount}
+    WHERE user_id = ${userId}
+      AND source_lang = ${sourceLang}
+      AND target_lang = ${targetLang}
+      AND level = ${level}
+  `;
+}
+
 export type DashboardRow = {
   source_lang: string;
   target_lang: string;

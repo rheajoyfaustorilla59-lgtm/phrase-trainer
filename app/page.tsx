@@ -56,7 +56,7 @@ type Stage =
       mistake: { correct: string; wrong: string } | null;
       wrongByPhrase: Record<number, string[]>;
     }
-  | { kind: "block-done"; block: SessionBlock; phrases: PhraseItem[] };
+  | { kind: "block-done"; block: SessionBlock; phrases: PhraseItem[]; words: string[]; wordCount: number };
 
 /* ─── Helpers ─── */
 
@@ -397,7 +397,16 @@ export default function Home() {
         const newCurrentN = phrase.phrase_index;
         const remaining = prev.phrases.filter((p) => p.phrase_index > newCurrentN);
         if (remaining.length === 0) {
-          return { kind: "block-done", block: prev.block, phrases: prev.phrases };
+          (async () => {
+            try {
+              const res = await fetch(`/api/known-words?source=${sourceLang}&target=${targetLang}&level=${level}`);
+              if (res.ok) {
+                const data = (await res.json()) as KnownWordsData;
+                setStage({ kind: "block-done", block: prev.block, phrases: prev.phrases, words: data.words, wordCount: data.count });
+              }
+            } catch {}
+          })();
+          return { kind: "block-done", block: prev.block, phrases: prev.phrases, words: [], wordCount: 0 };
         }
         return { ...prev, currentN: newCurrentN, submitting: false, mistake: null };
       });
@@ -923,18 +932,41 @@ export default function Home() {
           </div>
 
           <div className="px-10 lg:px-14 py-9">
-            <div className="eyebrow mb-4">Phrases in this block</div>
-            <div className="space-y-2 max-w-[640px]">
-              {stage.phrases.map((p) => (
-                <div
-                  key={p.phrase_index}
-                  className="px-4 py-3 bg-paper border border-rule rounded-xl flex items-baseline justify-between gap-4"
-                >
-                  <div className="text-[13px] text-ink-3 shrink-0">{p.source_text}</div>
-                  <div className="font-serif text-[17px] text-ink text-right">{p.target_text}</div>
-                </div>
-              ))}
+            <div className="flex items-baseline justify-between mb-4">
+              <div className="eyebrow">Words learned in this block</div>
+              <span className="font-mono text-[13px] text-ink-3">{stage.wordCount} words</span>
             </div>
+            {stage.words.length === 0 ? (
+              <p className="text-[13px] text-ink-3 italic">No new words in this block.</p>
+            ) : (
+              <div className="flex flex-wrap gap-2">
+                {stage.words.map((w) => (
+                  <div
+                    key={w}
+                    className="inline-flex items-center gap-1.5 bg-paper border border-rule rounded-full pl-3 pr-1.5 py-1 group hover:border-bad/40 transition-colors"
+                  >
+                    <span className="text-[13px] text-ink font-medium">{w}</span>
+                    <button
+                      onClick={async () => {
+                        try {
+                          const res = await fetch(`/api/known-words?source=${sourceLang}&target=${targetLang}&level=${level}&word=${encodeURIComponent(w)}`, { method: "DELETE" });
+                          if (!res.ok) throw new Error();
+                          setStage((prev) =>
+                            prev.kind === "block-done"
+                              ? { ...prev, words: prev.words.filter((x) => x !== w), wordCount: prev.wordCount - 1 }
+                              : prev,
+                          );
+                        } catch {}
+                      }}
+                      className="w-5 h-5 rounded-full flex items-center justify-center text-[11px] text-ink-3 hover:text-bad hover:bg-bad/10 opacity-0 group-hover:opacity-100 transition-all"
+                      title="Remove word"
+                    >
+                      ✕
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         </div>
         <Footer
