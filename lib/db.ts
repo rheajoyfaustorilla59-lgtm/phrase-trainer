@@ -63,6 +63,30 @@ async function init(): Promise<void> {
     CREATE INDEX IF NOT EXISTS idx_phrases_lookup
       ON phrases (user_id, source_lang, target_lang, level, phrase_index)
   `;
+
+  await sql`
+    CREATE TABLE IF NOT EXISTS phrase_blocks (
+      id SERIAL PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      source_lang TEXT NOT NULL,
+      target_lang TEXT NOT NULL,
+      level TEXT NOT NULL,
+      block_index INTEGER NOT NULL,
+      description TEXT NOT NULL,
+      phrase_count INTEGER NOT NULL,
+      completed BOOLEAN NOT NULL DEFAULT FALSE,
+      created_at BIGINT NOT NULL,
+      UNIQUE (user_id, source_lang, target_lang, level, block_index)
+    )
+  `;
+
+  await sql`
+    CREATE INDEX IF NOT EXISTS idx_blocks_lookup
+      ON phrase_blocks (user_id, source_lang, target_lang, level, block_index)
+  `;
+
+  await sql`ALTER TABLE phrases ADD COLUMN IF NOT EXISTS block_id INTEGER`;
+  await sql`CREATE INDEX IF NOT EXISTS idx_phrases_block ON phrases (block_id)`;
 }
 
 export async function getSql() {

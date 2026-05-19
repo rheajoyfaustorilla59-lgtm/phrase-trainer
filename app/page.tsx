@@ -24,6 +24,9 @@ type ProgressRow = {
   level: string;
   current_n: number;
   learned_word_count: number;
+  block_count: number;
+  completed_block_count: number;
+  active_block_description: string | null;
 };
 
 type DashboardData = {
@@ -35,6 +38,7 @@ type Stage =
   | { kind: "dashboard-loading" }
   | { kind: "dashboard"; data: DashboardData }
   | { kind: "picker" }
+  | { kind: "block-create"; submitting: boolean; error: string | null }
   | { kind: "loading" }
   | { kind: "ready"; state: StateResponse }
   | {
@@ -322,7 +326,46 @@ export default function Home() {
       setError("Pick two different languages.");
       return;
     }
-    await loadState();
+    // Check if there's an active block. If yes, go straight to training.
+    // If no, route to block-create so the user can build the next batch.
+    setError(null);
+    setStage({ kind: "loading" });
+    try {
+      const url = `/api/blocks?source=${sourceLang}&target=${targetLang}&level=${level}`;
+      const res = await fetch(url);
+      if (!res.ok) throw new Error(await res.text());
+      const data = (await res.json()) as { activeBlock: { id: number } | null };
+      if (data.activeBlock) {
+        await loadState();
+      } else {
+        setStage({ kind: "block-create", submitting: false, error: null });
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to check blocks");
+      setStage({ kind: "dashboard-loading" });
+    }
+  }
+
+  async function submitBlockCreate(description: string | null) {
+    setStage({ kind: "block-create", submitting: true, error: null });
+    try {
+      const res = await fetch("/api/blocks", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ sourceLang, targetLang, level, description }),
+      });
+      if (!res.ok) {
+        const data = (await res.json().catch(() => ({}))) as { error?: string };
+        throw new Error(data.error ?? "Failed to create block");
+      }
+      await loadState();
+    } catch (e) {
+      setStage({
+        kind: "block-create",
+        submitting: false,
+        error: e instanceof Error ? e.message : "Failed to create block",
+      });
+    }
   }
 
   function beginSession() {
@@ -350,6 +393,11 @@ export default function Home() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ sourceLang, targetLang, level }),
       });
+      if (res.status === 409) {
+        // Block exhausted — prompt the user to create a new one
+        setStage({ kind: "block-create", submitting: false, error: null });
+        return;
+      }
       if (!res.ok) {
         const data = (await res.json().catch(() => ({}))) as { error?: string };
         throw new Error(data.error ?? "Failed to fetch new phrase");
@@ -449,6 +497,20 @@ export default function Home() {
     target: s.targetWordCount,
     phraseN: s.currentN,
   });
+
+  /* ───────────── BLOCK CREATE ───────────── */
+  if (stage.kind === "block-create") {
+    return <BlockCreateView
+      sourceLabel={sourceLabel}
+      targetLabel={targetLabel}
+      level={level}
+      submitting={stage.submitting}
+      error={stage.error}
+      onSubmit={submitBlockCreate}
+      onBack={() => setStage({ kind: "dashboard-loading" })}
+      user={session?.user}
+    />;
+  }
 
   /* ───────────── DASHBOARD LOADING ───────────── */
   if (stage.kind === "dashboard-loading") {
@@ -572,16 +634,31 @@ export default function Home() {
                           style={{ width: `${pct}%` }}
                         />
                       </div>
+                      {p.block_count > 0 && (
+                        <div className="mt-3 text-[11.5px] text-ink-3 flex flex-wrap gap-x-3">
+                          <span>
+                            <span className="text-ink font-medium">
+                              {p.completed_block_count}
+                            </span>
+                            <span> / {p.block_count} blocks done</span>
+                          </span>
+                          {p.active_block_description && (
+                            <span className="italic">
+                              In progress: &ldquo;{p.active_block_description}&rdquo;
+                            </span>
+                          )}
+                        </div>
+                      )}
                       <button
                         onClick={async () => {
                           setSourceLang(p.source_lang as LanguageCode);
                           setTargetLang(p.target_lang as LanguageCode);
                           setLevel(p.level as LevelCode);
-                          await loadState();
+                          await startSession();
                         }}
                         className="mt-3 text-[12px] text-terracotta hover:text-ink-2 font-medium inline-flex items-center gap-1"
                       >
-                        Continue →
+                        {p.active_block_description ? "Continue" : "New block"} →
                       </button>
                     </div>
                   );
@@ -1210,5 +1287,100 @@ function Totals({ n, l, sub, accent, last }: { n: string; l: string; sub?: strin
       </div>
       <div className="eyebrow mt-2">{l}</div>
     </div>
+  );
+}
+
+function BlockCreateView({
+  sourceLabel,
+  targetLabel,
+  level,
+  submitting,
+  error,
+  onSubmit,
+  onBack,
+  user,
+}: {
+  sourceLabel: string | undefined;
+  targetLabel: string | undefined;
+  level: string;
+  submitting: boolean;
+  error: string | null;
+  onSubmit: (description: string | null) => void;
+  onBack: () => void;
+  user?: { name?: string | null; email?: string | null; image?: string | null };
+}) {
+  const [description, setDescription] = useState("");
+
+  return (
+    <Page>
+      <Masthead user={user} />
+      <div className="flex-1 overflow-y-auto px-10 lg:px-14 py-12">
+        <div className="max-w-[640px] mx-auto">
+          <button
+            onClick={onBack}
+            className="text-[11.5px] text-ink-2 hover:text-ink underline underline-offset-2 mb-6"
+          >
+            ← Back to dashboard
+          </button>
+
+          <div className="eyebrow text-terracotta mb-3">New block</div>
+          <h1 className="font-serif text-[44px] leading-[1.05] tracking-[-0.02em] mb-3">
+            What should the next <span className="italic text-terracotta">block</span> teach you?
+          </h1>
+          <p className="text-[14.5px] text-ink-2 leading-[1.6] mb-8">
+            5 phrases in {targetLabel ?? "your target language"} ({level}), generated by AI based on
+            your description and what you don&apos;t know yet.
+          </p>
+
+          <div className="bg-paper border border-rule rounded-2xl p-6 mb-5">
+            <div className="eyebrow mb-2">Describe the theme</div>
+            <textarea
+              value={description}
+              onChange={(e) => setDescription(e.target.value)}
+              placeholder='e.g. "Ordering food at a restaurant" — or leave empty for auto-pick'
+              rows={4}
+              disabled={submitting}
+              className="w-full bg-cream border border-rule rounded-xl px-4 py-3 text-[15px] text-ink placeholder:text-ink-3 placeholder:italic outline-none focus:border-ink resize-none"
+            />
+            <p className="text-[11.5px] text-ink-3 mt-2">
+              The AI will pick 5 phrases matching your theme — only using words you don&apos;t
+              already know.
+            </p>
+          </div>
+
+          {error && (
+            <div className="bg-bad-soft border border-bad/30 text-bad rounded-xl px-4 py-3 mb-5 text-[13px]">
+              {error}
+            </div>
+          )}
+
+          <div className="flex flex-col sm:flex-row gap-3">
+            <button
+              onClick={() => onSubmit(description.trim() || null)}
+              disabled={submitting || !description.trim()}
+              className={`${PRIMARY_BTN} flex-1`}
+            >
+              {submitting ? "Generating…" : "Create block"}
+              {!submitting && <ArrowRight />}
+            </button>
+            <button
+              onClick={() => onSubmit(null)}
+              disabled={submitting}
+              className="inline-flex items-center justify-center gap-2 border border-ink bg-transparent text-ink rounded-full px-6 py-3.5 text-sm font-medium hover:bg-ink hover:text-paper transition-colors disabled:opacity-40"
+            >
+              ✨ Generate automatically
+            </button>
+          </div>
+
+          <p className="text-[11.5px] text-ink-3 mt-5 text-center">
+            Pair: {sourceLabel} → {targetLabel} · Level {level} · 5 phrases per block
+          </p>
+        </div>
+      </div>
+      <Footer
+        left={<span>Each block is a coherent set of phrases on one theme.</span>}
+        right={<span>~10 seconds to generate</span>}
+      />
+    </Page>
   );
 }

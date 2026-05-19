@@ -3,7 +3,7 @@ import { auth } from "@/auth";
 import {
   ensureUserByEmail,
   ensureUserLevel,
-  generateAndStoreNextPhrase,
+  getNextPendingPhrase,
   markPhraseLearned,
 } from "@/lib/session";
 import type { LanguageCode, LevelCode } from "@/lib/languages";
@@ -30,12 +30,18 @@ export async function POST(req: Request) {
     );
     await ensureUserLevel(userId, body.sourceLang, body.targetLang, body.level);
 
-    const phrase = await generateAndStoreNextPhrase(
+    const phrase = await getNextPendingPhrase(
       userId,
       body.sourceLang,
       body.targetLang,
       body.level,
     );
+    if (!phrase) {
+      return NextResponse.json(
+        { needsBlock: true, error: "No more phrases — create a new block." },
+        { status: 409 },
+      );
+    }
 
     await markPhraseLearned(
       userId,

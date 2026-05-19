@@ -115,6 +115,120 @@ Pick a completely fresh topic and emit a phrase with maximum new vocabulary. Ret
   };
 }
 
+export type BlockPhrase = {
+  source_text: string;
+  target_text: string;
+};
+
+export type GeneratedBlock = {
+  description: string;
+  phrases: BlockPhrase[];
+};
+
+export async function generateBlock(params: {
+  sourceLang: LanguageCode;
+  targetLang: LanguageCode;
+  level: LevelCode;
+  knownWords: string[];
+  userDescription: string | null;
+  phraseCount: number;
+}): Promise<GeneratedBlock> {
+  const sourceLabel = languageLabel(params.sourceLang);
+  const targetLabel = languageLabel(params.targetLang);
+  const level = levelInfo(params.level);
+  const knownList = params.knownWords.slice(-300);
+
+  const system = `You generate themed blocks of language-learning phrases.
+
+A block is a coherent set of ${params.phraseCount} phrases connected by a theme or topic.
+
+Hard rules:
+- Generate exactly ${params.phraseCount} phrases in ${targetLabel}.
+- Every phrase must contain between 2 and 5 words.
+- Vocabulary and grammar must match CEFR level ${level.code} (~${level.targetWords} total target words).
+- Use simple words appropriate for ${level.code}; never pull obscure or higher-level vocabulary.
+- Each phrase must introduce at least 1 NEW word not in the known list. Aim for fresh vocabulary across the block.
+- Phrases within the block should connect to the theme/topic but explore different angles (don't repeat the same sentence pattern).
+- Provide accurate ${sourceLabel} translations.
+
+If the user gives a description, follow it. If empty, pick a useful everyday topic (food, family, weather, travel, feelings, work, time, places, body, numbers, etc.) suited to the level.
+
+Output ONLY a JSON object. Schema:
+{
+  "description": "short theme label (3-6 words)",
+  "phrases": [
+    { "source_text": "translation in ${sourceLabel}", "target_text": "phrase in ${targetLabel}" },
+    ...
+  ]
+}`;
+
+  const user = `Source: ${sourceLabel}
+Target: ${targetLabel}
+Level: ${level.code}
+Phrases per block: ${params.phraseCount}
+
+User description (theme guidance):
+${params.userDescription?.trim() ? params.userDescription.trim() : "(empty — pick a fresh, useful theme yourself)"}
+
+Already-known ${targetLabel} words (do NOT count any as new; prefer fully novel vocabulary):
+${knownList.length ? knownList.join(", ") : "(none yet)"}
+
+Return JSON only.`;
+
+  const completion = await getClient().chat.completions.create({
+    model: "deepseek-chat",
+    messages: [
+      { role: "system", content: system },
+      { role: "user", content: user },
+    ],
+    response_format: { type: "json_object" },
+    temperature: 0.9,
+    max_tokens: 1200,
+  });
+
+  const raw = completion.choices[0]?.message?.content?.trim();
+  if (!raw) throw new Error("DeepSeek returned empty content");
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    throw new Error(`DeepSeek returned invalid JSON: ${raw.slice(0, 200)}`);
+  }
+
+  const block = parsed as Partial<GeneratedBlock>;
+  if (typeof block.description !== "string" || !Array.isArray(block.phrases)) {
+    throw new Error(`Block response missing fields: ${raw.slice(0, 200)}`);
+  }
+  if (block.phrases.length === 0) {
+    throw new Error("Block returned zero phrases");
+  }
+
+  const phrases: BlockPhrase[] = [];
+  for (const p of block.phrases.slice(0, params.phraseCount)) {
+    if (
+      typeof (p as BlockPhrase).source_text !== "string" ||
+      typeof (p as BlockPhrase).target_text !== "string"
+    )
+      continue;
+    const target = (p as BlockPhrase).target_text.trim();
+    const count = target.split(/\s+/).length;
+    if (count < 2 || count > 5) continue;
+    phrases.push({
+      source_text: (p as BlockPhrase).source_text.trim(),
+      target_text: target,
+    });
+  }
+  if (phrases.length === 0) {
+    throw new Error("All phrases in block failed validation (word count 2-5)");
+  }
+
+  return {
+    description: block.description.trim(),
+    phrases,
+  };
+}
+
 export function tokenizeWords(text: string): string[] {
   return text
     .toLowerCase()
