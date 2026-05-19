@@ -171,6 +171,9 @@ export default function Home() {
     inputRef.current?.focus();
   }, [stage]);
 
+  const sourceLabel = useMemo(() => LANGUAGES.find((l) => l.code === sourceLang)?.label, [sourceLang]);
+  const targetLabel = useMemo(() => LANGUAGES.find((l) => l.code === targetLang)?.label, [targetLang]);
+
   // ───────────── AUTH GATE ─────────────
   if (status === "loading") {
     return (
@@ -363,9 +366,6 @@ export default function Home() {
     setError(null);
     setInput("");
   }
-
-  const sourceLabel = useMemo(() => LANGUAGES.find((l) => l.code === sourceLang)?.label, [sourceLang]);
-  const targetLabel = useMemo(() => LANGUAGES.find((l) => l.code === targetLang)?.label, [targetLang]);
 
   const sessionInfo = (s: StateResponse) => ({
     pair: `${sourceLabel} → ${targetLabel} · ${level}`,
