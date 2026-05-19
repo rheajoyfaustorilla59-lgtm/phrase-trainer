@@ -101,15 +101,34 @@ function Masthead({
           </>
         )}
         {user && (
-          <div className="flex items-center gap-2">
-            {user.image && (
-              // eslint-disable-next-line @next/next/no-img-element
-              <img
-                src={user.image}
-                alt={user.name ?? "User"}
-                className="w-7 h-7 rounded-full border border-rule"
-              />
-            )}
+          <div className="flex items-center gap-2.5">
+            <div className="flex items-center gap-2 bg-good-soft border border-good/30 rounded-full pl-1 pr-3 py-[3px]">
+              {user.image ? (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img
+                  src={user.image}
+                  alt={user.name ?? "User"}
+                  className="w-6 h-6 rounded-full"
+                />
+              ) : (
+                <div className="w-6 h-6 rounded-full bg-good/30 flex items-center justify-center text-[11px] font-medium text-good">
+                  {(user.name ?? user.email ?? "?").charAt(0).toUpperCase()}
+                </div>
+              )}
+              <div className="flex flex-col leading-tight">
+                <span className="text-[10px] uppercase tracking-wider text-good font-semibold">
+                  Signed in
+                </span>
+                {user.name && (
+                  <span
+                    className="text-[12px] text-ink font-medium max-w-[140px] truncate"
+                    title={user.email ?? undefined}
+                  >
+                    {user.name}
+                  </span>
+                )}
+              </div>
+            </div>
             <button
               onClick={() => signOut()}
               className="inline-flex items-center border border-rule bg-transparent text-ink-2 text-[11.5px] font-medium px-3 py-[7px] rounded-full hover:text-ink hover:border-ink-3 transition-colors"
@@ -378,7 +397,7 @@ export default function Home() {
   if (stage.kind === "picker") {
     return (
       <Page>
-        <Masthead />
+        <Masthead user={session?.user} />
         <div className="flex-1 grid grid-cols-1 lg:grid-cols-[1.15fr_1fr]">
           {/* Editorial hero */}
           <div className="px-10 lg:px-14 py-14 flex flex-col justify-between lg:border-r border-rule">
@@ -442,7 +461,7 @@ export default function Home() {
   if (stage.kind === "loading" || stage.kind === "generating") {
     return (
       <Page>
-        <Masthead sessionInfo={undefined} />
+        <Masthead sessionInfo={undefined} user={session?.user} />
         <div className="flex-1 grid place-items-center px-9">
           <div className="text-center">
             <div className="eyebrow text-terracotta">{stage.kind === "loading" ? "Loading" : "Generating"}</div>
