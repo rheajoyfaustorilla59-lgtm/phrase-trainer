@@ -202,12 +202,12 @@ export default function Home() {
   const [stage, setStage] = useState<Stage>({ kind: "dashboard-loading" });
   const [input, setInput] = useState("");
   const [error, setError] = useState<string | null>(null);
-  const [wordsModal, setWordsModal] = useState<{
+  const [phrasesModal, setPhrasesModal] = useState<{
     source: string;
     target: string;
     level: string;
-    words: string[];
-    count: number;
+    blockDescription: string;
+    phrases: PhraseItem[];
     loading: boolean;
   } | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -592,13 +592,13 @@ export default function Home() {
                                 <button
                                   onClick={async () => {
                                     const src = p.source_lang; const tgt = p.target_lang; const lvl = p.level;
-                                    setWordsModal({ source: src, target: tgt, level: lvl, words: [], count: 0, loading: true });
+                                    setPhrasesModal({ source: src, target: tgt, level: lvl, blockDescription: b.description, phrases: [], loading: true });
                                     try {
-                                      const res = await fetch(`/api/known-words?source=${src}&target=${tgt}&level=${lvl}`);
+                                      const res = await fetch(`/api/session-phrases?source=${src}&target=${tgt}&level=${lvl}`);
                                       if (!res.ok) throw new Error();
-                                      const data = (await res.json()) as KnownWordsData;
-                                      setWordsModal({ source: src, target: tgt, level: lvl, words: data.words, count: data.count, loading: false });
-                                    } catch { setWordsModal(null); }
+                                      const data = await res.json();
+                                      setPhrasesModal({ source: src, target: tgt, level: lvl, blockDescription: b.description, phrases: data.phrases ?? [], loading: false });
+                                    } catch { setPhrasesModal(null); }
                                   }}
                                   className="text-[10px] border border-rule text-ink-2 rounded-full px-2.5 py-1 font-medium hover:text-ink hover:border-ink-3 transition-colors"
                                 >
@@ -678,49 +678,55 @@ export default function Home() {
         />
       </Page>
 
-      {wordsModal && (
+      {phrasesModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-          <div className="absolute inset-0 bg-black/30" onClick={() => setWordsModal(null)} />
-          <div className="relative bg-paper border border-rule rounded-2xl shadow-2xl w-full max-w-[560px] max-h-[80vh] flex flex-col">
+          <div className="absolute inset-0 bg-black/30" onClick={() => setPhrasesModal(null)} />
+          <div className="relative bg-paper border border-rule rounded-2xl shadow-2xl w-full max-w-[600px] max-h-[80vh] flex flex-col">
             <div className="flex items-baseline justify-between px-6 pt-5 pb-3 border-b border-rule">
               <div>
-                <div className="eyebrow mb-1">Words learned</div>
+                <div className="eyebrow mb-1">Block phrases</div>
                 <div className="font-serif text-[20px] text-ink">
-                  {LANGUAGES.find((l) => l.code === wordsModal.source)?.label ?? wordsModal.source}
+                  {LANGUAGES.find((l) => l.code === phrasesModal.source)?.label ?? phrasesModal.source}
                   {" "}→{" "}
                   <span className="italic text-terracotta">
-                    {LANGUAGES.find((l) => l.code === wordsModal.target)?.label ?? wordsModal.target}
+                    {LANGUAGES.find((l) => l.code === phrasesModal.target)?.label ?? phrasesModal.target}
                   </span>
-                  {" · "}{wordsModal.level}
+                  {" · "}{phrasesModal.level}
                 </div>
+                {phrasesModal.blockDescription && (
+                  <div className="text-[12px] text-ink-3 mt-1 italic">
+                    &ldquo;{phrasesModal.blockDescription}&rdquo;
+                  </div>
+                )}
               </div>
               <span className="font-mono text-[13px] text-ink-3">
-                {wordsModal.loading ? "..." : wordsModal.count}
+                {phrasesModal.loading ? "..." : phrasesModal.phrases.length}
               </span>
             </div>
             <div className="flex-1 overflow-y-auto px-6 py-4">
-              {wordsModal.loading ? (
+              {phrasesModal.loading ? (
                 <div className="flex justify-center py-8">
-                  <p className="eyebrow">Loading words…</p>
+                  <p className="eyebrow">Loading phrases…</p>
                 </div>
-              ) : wordsModal.words.length === 0 ? (
-                <p className="text-[13px] text-ink-3 italic">No words learned yet.</p>
+              ) : phrasesModal.phrases.length === 0 ? (
+                <p className="text-[13px] text-ink-3 italic">No phrases in this block yet.</p>
               ) : (
-                <div className="flex flex-wrap gap-2">
-                  {wordsModal.words.map((w) => (
-                    <span
-                      key={w}
-                      className="text-[13px] text-ink bg-cream border border-rule px-2.5 py-1 rounded-full font-medium"
+                <div className="space-y-2">
+                  {phrasesModal.phrases.map((ph) => (
+                    <div
+                      key={ph.phrase_index}
+                      className="px-4 py-3 bg-cream border border-rule rounded-xl flex items-baseline justify-between gap-4"
                     >
-                      {w}
-                    </span>
+                      <div className="text-[13px] text-ink-3 shrink-0">{ph.source_text}</div>
+                      <div className="font-serif text-[17px] text-ink text-right">{ph.target_text}</div>
+                    </div>
                   ))}
                 </div>
               )}
             </div>
             <div className="px-6 py-3 border-t border-rule text-right">
               <button
-                onClick={() => setWordsModal(null)}
+                onClick={() => setPhrasesModal(null)}
                 className="text-[12px] text-ink-2 hover:text-ink underline underline-offset-2"
               >
                 Close
