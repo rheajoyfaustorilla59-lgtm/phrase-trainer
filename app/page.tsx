@@ -857,8 +857,24 @@ export default function Home() {
                 ) : (
                   <div className="mt-2">
                     <div className="eyebrow mb-2">{sourceLabel}</div>
-                    <div className="font-serif text-[42px] md:text-[46px] leading-[1.12] tracking-[-0.015em] text-ink">
+                    <div className="font-serif text-[42px] md:text-[46px] leading-[1.12] tracking-[-0.015em] text-ink mb-2">
                       {currentPhrase.source_text}
+                    </div>
+                    {/* Show the target text as a light reference for beginners */}
+                    <div className="flex items-center gap-2">
+                      <span className="text-[13px] text-ink-2/50 italic">
+                        {currentPhrase.target_text}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          // Fill input with the correct answer so user can copy/submit
+                          setInput(currentPhrase.target_text);
+                        }}
+                        className="text-[10px] text-ink-3 hover:text-terracotta underline underline-offset-2 transition-colors"
+                      >
+                        ✨ use this
+                      </button>
                     </div>
                   </div>
                 )}
