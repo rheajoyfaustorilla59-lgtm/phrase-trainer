@@ -68,6 +68,44 @@ type Stage =
     }
   | { kind: "block-done"; block: SessionBlock; phrases: PhraseItem[]; words: string[]; wordCount: number };
 
+/* ─── Funny quotes (English) ─── */
+
+const FUNNY_QUOTES = [
+  "Your brain is 70% water and 30% confusion. Let's fix that.",
+  "Learning a language is easy… said no one ever.",
+  "Mistakes are proof that you're trying. Also, they're funny.",
+  "Your accent is the most interesting thing about you right now.",
+  "Languages are like relationships — at first, nothing makes sense.",
+  "If at first you don't succeed, blame autocorrect.",
+  "Speaking a new language sounds like a song… a very confusing song.",
+  "Every expert was once a beginner who refused to give up. Or was forced by Duolingo.",
+  "You don't need a translator. You need a nap and a snack.",
+  "Congratulations! You just used 3 brain cells. Only billions more to go!",
+  "Your tongue is currently in a language gym. Gains incoming.",
+  "Remember: babies learn languages too. And they poop their pants. You're already ahead.",
+  "Trying to learn Cebuano? Bisaya? You're braver than most. Respect.",
+  "One day you'll dream in Cebuano. Today is not that day. But someday!",
+  "The best time to learn a language was 10 years ago. The second best time is right now. The third best time is after coffee.",
+  "Languages are free. Embarrassment is temporary. Go for it.",
+];
+
+const MISTAKE_JOKES = [
+  "Close! Well, not really. But hey, you typed something!",
+  "Not quite. But you made the AI laugh. That's a win.",
+  "Oof. That was… creative. We respect creativity here.",
+  "Nope! But your keyboard is very brave.",
+  "Not today, language legend. Try again!",
+  "Wrong! But you're learning. Slowly. But learning.",
+  "That's not it. But honestly, we've heard worse.",
+  "Missed! But you're still cooler than someone who doesn't try.",
+  "Almost… if 'almost' means 'not at all'. Still proud of you.",
+  "Incorrect. But your confidence is inspiring. Keep going!",
+];
+
+function randomItem(arr: string[]): string {
+  return arr[Math.floor(Math.random() * arr.length)];
+}
+
 /* ─── Helpers ─── */
 
 function normalize(text: string): string {
@@ -210,6 +248,9 @@ export default function Home() {
     phrases: PhraseItem[];
     loading: boolean;
   } | null>(null);
+  const [funnyQuote] = useState(() => randomItem(FUNNY_QUOTES));
+  const [loadingQuote] = useState(() => randomItem(FUNNY_QUOTES));
+  const [dashboardFooterQuote] = useState(() => randomItem(FUNNY_QUOTES));
   const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -482,6 +523,9 @@ export default function Home() {
                 "Welcome back."
               )}
             </h1>
+            <p className="text-[13px] text-ink-3 mt-4 italic max-w-[500px] leading-relaxed">
+              💬 {funnyQuote}
+            </p>
           </div>
 
           {/* In-progress languages */}
@@ -687,7 +731,7 @@ export default function Home() {
           </div>
         </div>
         <Footer
-          left={<span>Signed in as {session?.user?.email}</span>}
+          left={<span className="italic max-w-[300px] truncate">💬 {dashboardFooterQuote}</span>}
           right={
             <button
               onClick={() => signOut()}
@@ -787,7 +831,10 @@ export default function Home() {
           <div className="text-center">
             <div className="eyebrow text-terracotta">Loading</div>
             <p className="font-serif text-[36px] mt-3 leading-tight">
-              Reaching for your phrases…
+              Summoning the phrases…
+            </p>
+            <p className="text-[13px] text-ink-3 mt-3 italic">
+              💬 {loadingQuote}
             </p>
             <div className="mt-6 flex justify-center gap-1.5">
               {[0, 1, 2].map((i) => (
@@ -841,7 +888,9 @@ export default function Home() {
 
                 {stage.mistake ? (
                   <div className="mt-2">
-                    <div className="eyebrow text-bad mb-2">● Not quite</div>
+                    <div className="flex items-center gap-2 mb-2">
+                      <span className="eyebrow text-bad">● {randomItem(MISTAKE_JOKES)}</span>
+                    </div>
                     <div className="text-[13px] text-ink-3 mb-1">
                       {currentPhrase.source_text}
                     </div>
@@ -1018,6 +1067,9 @@ export default function Home() {
             </h1>
             <p className="text-[14px] text-ink-2">
               {stage.phrases.length} phrases learned in this block.
+            </p>
+            <p className="text-[13px] text-ink-3 mt-3 italic">
+              💬 {funnyQuote}
             </p>
             <button
               onClick={() => setStage({ kind: "block-create", submitting: false, error: null })}
