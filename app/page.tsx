@@ -21,6 +21,14 @@ type SessionBlock = {
   delivered_count: number;
 };
 
+type BlockSummary = {
+  id: number;
+  block_index: number;
+  description: string;
+  phrase_count: number;
+  completed: boolean;
+};
+
 type ProgressRow = {
   source_lang: string;
   target_lang: string;
@@ -39,6 +47,7 @@ type KnownWordsData = {
 
 type DashboardData = {
   progress: ProgressRow[];
+  blocksByLang: Record<string, BlockSummary[]>;
   uiLang: string;
 };
 
@@ -49,6 +58,7 @@ type Stage =
   | { kind: "loading" }
   | {
       kind: "session";
+      mode: "repeat" | "test";
       block: SessionBlock;
       phrases: PhraseItem[];
       currentN: number;
@@ -110,9 +120,9 @@ function Masthead({
                 onClick={onChange}
                 className="inline-flex items-center border border-rule bg-transparent text-ink-2 text-[11.5px] font-medium px-3 py-[7px] rounded-full hover:text-ink hover:border-ink-3 transition-colors"
               >
-                Change
+                Back to Dashboard
                 <svg width="10" height="10" viewBox="0 0 10 10" fill="none" className="ml-1.5">
-                  <path d="M3 1.5L6.5 5L3 8.5" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
+                  <path d="M1.5 5H8.5 M5 8.5L8.5 5L5 1.5" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
                 </svg>
               </button>
             )}
@@ -219,7 +229,7 @@ export default function Home() {
       } catch (e) {
         if (!cancelled) {
           setError(e instanceof Error ? e.message : "Failed to load dashboard");
-          setStage({ kind: "dashboard", data: { progress: [], uiLang: "english" } });
+          setStage({ kind: "dashboard", data: { progress: [], blocksByLang: {}, uiLang: "english" } });
         }
       }
     })();
@@ -313,6 +323,7 @@ export default function Home() {
       }
       setStage({
         kind: "session",
+        mode: "repeat",
         block: data.block,
         phrases: data.phrases,
         currentN: data.currentN,
@@ -367,7 +378,18 @@ export default function Home() {
 
     if (normalize(val) === normalize(currentPhrase.target_text)) {
       await advancePhrase(currentPhrase);
+    } else if (stage.mode === "test") {
+      // Test mode: mistake resets to beginning
+      const firstPhrase = stage.phrases[0];
+      setStage({
+        ...stage,
+        currentN: firstPhrase ? firstPhrase.phrase_index - 1 : 0,
+        mistake: null,
+        wrongByPhrase: {},
+      });
+      setInput("");
     } else {
+      // Repeat mode: just show the correct answer, continue
       const prev = stage.wrongByPhrase[currentPhrase.phrase_index] ?? [];
       setStage({
         ...stage,
@@ -439,7 +461,7 @@ export default function Home() {
   /* ─── DASHBOARD ─── */
 
   if (stage.kind === "dashboard") {
-    const { progress } = stage.data;
+    const { progress, blocksByLang } = stage.data;
     return (
       <>
       <Page>
@@ -470,94 +492,136 @@ export default function Home() {
                 Nothing started yet — start a new language below.
               </p>
             ) : (
-              <div className="space-y-3">
+              <div className="space-y-5">
                 {progress.map((p) => {
-                  const lvl = LEVELS.find((l) => l.code === p.level);
-                  const target = lvl?.targetWords ?? 1;
-                  const pct = Math.min(
-                    100,
-                    Math.round((p.learned_word_count / target) * 100),
-                  );
-                  const srcLabel =
-                    LANGUAGES.find((l) => l.code === p.source_lang)?.label ?? p.source_lang;
                   const tgtLabel =
                     LANGUAGES.find((l) => l.code === p.target_lang)?.label ?? p.target_lang;
+                  const langKey = `${p.source_lang}-${p.target_lang}-${p.level}`;
+                  const blocks = blocksByLang[langKey] ?? [];
+
                   return (
                     <div
-                      key={`${p.source_lang}-${p.target_lang}-${p.level}`}
+                      key={langKey}
                       className="bg-paper border border-rule rounded-2xl px-5 py-4"
                     >
-                      <div className="flex items-baseline justify-between mb-2">
-                        <div className="font-serif text-[20px] leading-none">
-                          {srcLabel} <span className="text-ink-3">→</span>{" "}
-                          <span className="italic text-terracotta">{tgtLabel}</span>
+                      {/* Language name only — e.g. "Russian" */}
+                      <div className="flex items-baseline justify-between mb-3">
+                        <div className="font-serif text-[22px] leading-none text-ink">
+                          {tgtLabel}
                         </div>
-                        <span className="font-mono text-[11px] text-ink-3 uppercase">
-                          {p.level}
-                        </span>
-                      </div>
-                      <div className="text-[12.5px] text-ink-2 tabular mb-3 flex flex-wrap gap-x-4 gap-y-1">
-                        <span>
-                          <span className="text-ink font-medium">{p.current_n}</span>
-                          <span className="text-ink-3"> phrases</span>
-                        </span>
-                        <span>
-                          <span className="text-ink font-medium">{p.learned_word_count}</span>
-                          <span className="text-ink-3"> / {target.toLocaleString()} words</span>
-                        </span>
-                        {p.block_count > 0 && (
-                          <span>
-                            <span className="text-ink font-medium">
-                              {p.completed_block_count}
-                            </span>
-                            <span className="text-ink-3"> / {p.block_count} blocks done</span>
+                        <div className="flex items-center gap-3">
+                          <span className="text-[12px] text-ink-3">
+                            {p.learned_word_count} words
                           </span>
+                          <span className="font-mono text-[11px] text-ink-3 uppercase">
+                            {p.level}
+                          </span>
+                        </div>
+                      </div>
+
+                      {/* Block list */}
+                      <div className="space-y-2">
+                        {blocks.length === 0 ? (
+                          <p className="text-[12px] text-ink-3 italic">
+                            No blocks yet — start a new one below.
+                          </p>
+                        ) : (
+                          blocks.map((b) => (
+                            <div
+                              key={b.id}
+                              className="flex items-center justify-between px-3.5 py-2.5 rounded-xl border border-rule bg-cream"
+                            >
+                              <div className="flex items-center gap-2.5 min-w-0">
+                                <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${b.completed ? "bg-good" : "bg-terracotta"}`} />
+                                <span className="font-serif text-[15px] text-ink truncate">
+                                  &ldquo;{b.description}&rdquo;
+                                </span>
+                                <span className="font-mono text-[10px] text-ink-3 shrink-0">
+                                  {b.phrase_count} phrases
+                                </span>
+                              </div>
+                              <div className="flex items-center gap-1.5 shrink-0">
+                                <button
+                                  onClick={async () => {
+                                    setSourceLang(p.source_lang as LanguageCode);
+                                    setTargetLang(p.target_lang as LanguageCode);
+                                    setLevel(p.level as LevelCode);
+                                    setStage({ kind: "loading" });
+                                    try {
+                                      const res = await fetch(`/api/session-phrases?source=${p.source_lang}&target=${p.target_lang}&level=${p.level}`);
+                                      if (!res.ok) throw new Error();
+                                      const data = await res.json();
+                                      if (!data.block) { setStage({ kind: "block-create", submitting: false, error: null }); return; }
+                                      setStage({
+                                        kind: "session", mode: "repeat",
+                                        block: data.block, phrases: data.phrases,
+                                        currentN: data.currentN, submitting: false,
+                                        mistake: null, wrongByPhrase: {},
+                                      });
+                                    } catch { setStage({ kind: "dashboard-loading" }); }
+                                  }}
+                                  className="text-[10px] bg-ink text-paper rounded-full px-2.5 py-1 font-medium hover:bg-ink-2 transition-colors"
+                                  title="Repeat mode — mistakes are forgiving"
+                                >
+                                  🔁 Repeat
+                                </button>
+                                <button
+                                  onClick={async () => {
+                                    setSourceLang(p.source_lang as LanguageCode);
+                                    setTargetLang(p.target_lang as LanguageCode);
+                                    setLevel(p.level as LevelCode);
+                                    setStage({ kind: "loading" });
+                                    try {
+                                      const res = await fetch(`/api/session-phrases?source=${p.source_lang}&target=${p.target_lang}&level=${p.level}`);
+                                      if (!res.ok) throw new Error();
+                                      const data = await res.json();
+                                      if (!data.block) { setStage({ kind: "block-create", submitting: false, error: null }); return; }
+                                      setStage({
+                                        kind: "session", mode: "test",
+                                        block: data.block, phrases: data.phrases,
+                                        currentN: data.currentN, submitting: false,
+                                        mistake: null, wrongByPhrase: {},
+                                      });
+                                    } catch { setStage({ kind: "dashboard-loading" }); }
+                                  }}
+                                  className="text-[10px] border border-ink text-ink rounded-full px-2.5 py-1 font-medium hover:bg-ink hover:text-paper transition-colors"
+                                  title="Test mode — one mistake resets everything"
+                                >
+                                  📝 Test
+                                </button>
+                                <button
+                                  onClick={async () => {
+                                    const src = p.source_lang; const tgt = p.target_lang; const lvl = p.level;
+                                    setWordsModal({ source: src, target: tgt, level: lvl, words: [], count: 0, loading: true });
+                                    try {
+                                      const res = await fetch(`/api/known-words?source=${src}&target=${tgt}&level=${lvl}`);
+                                      if (!res.ok) throw new Error();
+                                      const data = (await res.json()) as KnownWordsData;
+                                      setWordsModal({ source: src, target: tgt, level: lvl, words: data.words, count: data.count, loading: false });
+                                    } catch { setWordsModal(null); }
+                                  }}
+                                  className="text-[10px] border border-rule text-ink-2 rounded-full px-2.5 py-1 font-medium hover:text-ink hover:border-ink-3 transition-colors"
+                                >
+                                  👁 View list
+                                </button>
+                              </div>
+                            </div>
+                          ))
                         )}
                       </div>
-                      <div className="h-1.5 bg-rule rounded-full overflow-hidden mb-3">
-                        <div
-                          className="h-full bg-ink rounded-full"
-                          style={{ width: `${pct}%` }}
-                        />
-                      </div>
-                      <div className="flex items-center gap-2 flex-wrap">
+
+                      {/* New block button */}
                       <button
                         onClick={async () => {
                           setSourceLang(p.source_lang as LanguageCode);
                           setTargetLang(p.target_lang as LanguageCode);
                           setLevel(p.level as LevelCode);
-                          await startSession();
+                          setStage({ kind: "block-create", submitting: false, error: null });
                         }}
-                        className="text-[12px] text-terracotta hover:text-ink-2 font-medium inline-flex items-center gap-1"
+                        className="mt-2 text-[11px] text-ink-2 hover:text-ink underline underline-offset-2"
                       >
-                        {p.active_block_description
-                          ? `Continue "${p.active_block_description}"`
-                          : "New block"}{" "}
-                        →
+                        + New block
                       </button>
-                      {p.learned_word_count > 0 && (
-                        <button
-                          onClick={async () => {
-                            if (wordsModal?.loading) return;
-                            const src = p.source_lang;
-                            const tgt = p.target_lang;
-                            const lvl = p.level;
-                            setWordsModal({ source: src, target: tgt, level: lvl, words: [], count: 0, loading: true });
-                            try {
-                              const res = await fetch(`/api/known-words?source=${src}&target=${tgt}&level=${lvl}`);
-                              if (!res.ok) throw new Error();
-                              const data = (await res.json()) as KnownWordsData;
-                              setWordsModal({ source: src, target: tgt, level: lvl, words: data.words, count: data.count, loading: false });
-                            } catch {
-                              setWordsModal(null);
-                            }
-                          }}
-                          className="text-[12px] text-ink-2 hover:text-ink font-medium inline-flex items-center gap-1"
-                        >
-                          View words ({p.learned_word_count})
-                        </button>
-                      )}
-                      </div>
                     </div>
                   );
                 })}
@@ -730,7 +794,7 @@ export default function Home() {
             done: doneCount,
             total: totalCount,
           }}
-          onChange={reset}
+          onChange={() => setStage({ kind: "dashboard-loading" })}
           user={session?.user}
         />
 
@@ -740,8 +804,10 @@ export default function Home() {
             {currentPhrase ? (
               <>
                 <div className="flex items-center justify-between mb-6">
-                  <div className="eyebrow">
-                    Phrase {doneCount + 1} of {totalCount}
+                  <div className="flex items-center gap-3">
+                    <span className="eyebrow">
+                      {stage.mode === "test" ? "📝 Test" : "🔁 Repeat"} · Phrase {doneCount + 1} of {totalCount}
+                    </span>
                   </div>
                   <BlockDots done={doneCount} total={totalCount} />
                 </div>

@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { auth } from "@/auth";
-import { ensureUserByEmail, getAllProgress, getUiLang, setUiLang } from "@/lib/session";
+import { ensureUserByEmail, getAllProgress, getAllBlocksPerLanguage, getUiLang, setUiLang } from "@/lib/session";
 
 export const runtime = "nodejs";
 
@@ -18,9 +18,10 @@ export async function GET() {
     );
 
     const progress = await getAllProgress(userId);
+    const blocksByLang = await getAllBlocksPerLanguage(userId);
     const uiLang = await getUiLang(userId);
 
-    return NextResponse.json({ progress, uiLang });
+    return NextResponse.json({ progress, blocksByLang, uiLang });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Unknown error";
     return NextResponse.json({ error: message }, { status: 500 });

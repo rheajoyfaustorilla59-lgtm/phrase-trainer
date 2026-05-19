@@ -249,6 +249,57 @@ export async function getAllProgress(userId: string): Promise<DashboardRow[]> {
   return rows;
 }
 
+export type BlockSummary = {
+  id: number;
+  block_index: number;
+  description: string;
+  phrase_count: number;
+  completed: boolean;
+};
+
+export async function getAllBlocksPerLanguage(userId: string): Promise<Record<string, BlockSummary[]>> {
+  const sql = await getSql();
+  const rows = (await sql`
+    SELECT 
+      b.id,
+      b.block_index,
+      b.description,
+      b.phrase_count,
+      b.completed,
+      b.user_id,
+      b.source_lang,
+      b.target_lang,
+      b.level
+    FROM phrase_blocks b
+    WHERE b.user_id = ${userId}
+    ORDER BY b.source_lang, b.target_lang, b.level, b.block_index ASC
+  `) as Array<{
+    id: number;
+    block_index: number;
+    description: string;
+    phrase_count: number;
+    completed: boolean;
+    user_id: string;
+    source_lang: string;
+    target_lang: string;
+    level: string;
+  }>;
+
+  const grouped: Record<string, BlockSummary[]> = {};
+  for (const r of rows) {
+    const key = `${r.source_lang}-${r.target_lang}-${r.level}`;
+    if (!grouped[key]) grouped[key] = [];
+    grouped[key].push({
+      id: r.id,
+      block_index: r.block_index,
+      description: r.description,
+      phrase_count: r.phrase_count,
+      completed: r.completed,
+    });
+  }
+  return grouped;
+}
+
 export async function getUiLang(userId: string): Promise<string> {
   const sql = await getSql();
   const rows = (await sql`SELECT ui_lang FROM users WHERE id = ${userId}`) as Array<{ ui_lang: string | null }>;
