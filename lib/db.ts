@@ -23,6 +23,12 @@ async function init(): Promise<void> {
     )
   `;
 
+  // Idempotent: add auth columns if migrating from anonymous-only schema
+  await sql`ALTER TABLE users ADD COLUMN IF NOT EXISTS email TEXT`;
+  await sql`ALTER TABLE users ADD COLUMN IF NOT EXISTS name TEXT`;
+  await sql`ALTER TABLE users ADD COLUMN IF NOT EXISTS image TEXT`;
+  await sql`CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email ON users(email)`;
+
   await sql`
     CREATE TABLE IF NOT EXISTS user_levels (
       user_id TEXT NOT NULL,

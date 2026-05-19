@@ -16,6 +16,26 @@ export async function ensureUser(userId: string | undefined): Promise<string> {
   return id;
 }
 
+export async function ensureUserByEmail(
+  email: string,
+  name: string | null | undefined,
+  image: string | null | undefined,
+): Promise<string> {
+  const sql = await getSql();
+  const rows = (await sql`SELECT id FROM users WHERE email = ${email}`) as Array<{ id: string }>;
+  if (rows[0]) {
+    // Refresh name/image in case they changed
+    await sql`UPDATE users SET name = ${name ?? null}, image = ${image ?? null} WHERE id = ${rows[0].id}`;
+    return rows[0].id;
+  }
+  const id = randomUUID();
+  await sql`
+    INSERT INTO users (id, email, name, image, created_at)
+    VALUES (${id}, ${email}, ${name ?? null}, ${image ?? null}, ${Date.now()})
+  `;
+  return id;
+}
+
 export async function ensureUserLevel(
   userId: string,
   sourceLang: LanguageCode,

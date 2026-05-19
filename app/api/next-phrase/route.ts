@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
-import { cookies } from "next/headers";
+import { auth } from "@/auth";
 import {
-  ensureUser,
+  ensureUserByEmail,
   ensureUserLevel,
   generateAndStoreNextPhrase,
   markPhraseLearned,
@@ -10,19 +10,24 @@ import type { LanguageCode, LevelCode } from "@/lib/languages";
 
 export const runtime = "nodejs";
 
-const COOKIE = "uid";
-
 export async function POST(req: Request) {
   try {
+    const session = await auth();
+    if (!session?.user?.email) {
+      return NextResponse.json({ error: "Not authenticated" }, { status: 401 });
+    }
+
     const body = (await req.json()) as {
       sourceLang: LanguageCode;
       targetLang: LanguageCode;
       level: LevelCode;
     };
 
-    const cookieStore = await cookies();
-    const existing = cookieStore.get(COOKIE)?.value;
-    const userId = await ensureUser(existing);
+    const userId = await ensureUserByEmail(
+      session.user.email,
+      session.user.name,
+      session.user.image,
+    );
     await ensureUserLevel(userId, body.sourceLang, body.targetLang, body.level);
 
     const phrase = await generateAndStoreNextPhrase(
@@ -41,16 +46,7 @@ export async function POST(req: Request) {
       phrase.new_words.length,
     );
 
-    const response = NextResponse.json({ phrase });
-    if (!existing || existing !== userId) {
-      response.cookies.set(COOKIE, userId, {
-        httpOnly: true,
-        sameSite: "lax",
-        path: "/",
-        maxAge: 60 * 60 * 24 * 365,
-      });
-    }
-    return response;
+    return NextResponse.json({ phrase });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Unknown error";
     return NextResponse.json({ error: message }, { status: 500 });
