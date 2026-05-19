@@ -18,7 +18,22 @@ type StateResponse = {
   window: WindowPhrase[];
 };
 
+type ProgressRow = {
+  source_lang: string;
+  target_lang: string;
+  level: string;
+  current_n: number;
+  learned_word_count: number;
+};
+
+type DashboardData = {
+  progress: ProgressRow[];
+  uiLang: string;
+};
+
 type Stage =
+  | { kind: "dashboard-loading" }
+  | { kind: "dashboard"; data: DashboardData }
   | { kind: "picker" }
   | { kind: "loading" }
   | { kind: "ready"; state: StateResponse }
@@ -181,7 +196,7 @@ export default function Home() {
   const [sourceLang, setSourceLang] = useState<LanguageCode>("english");
   const [targetLang, setTargetLang] = useState<LanguageCode>("tagalog");
   const [level, setLevel] = useState<LevelCode>("A1");
-  const [stage, setStage] = useState<Stage>({ kind: "picker" });
+  const [stage, setStage] = useState<Stage>({ kind: "dashboard-loading" });
   const [input, setInput] = useState("");
   const [error, setError] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -189,6 +204,48 @@ export default function Home() {
   useEffect(() => {
     inputRef.current?.focus();
   }, [stage]);
+
+  // Load dashboard when user becomes authenticated
+  useEffect(() => {
+    if (status !== "authenticated") return;
+    if (stage.kind !== "dashboard-loading") return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch("/api/dashboard");
+        if (!res.ok) throw new Error(await res.text());
+        const data = (await res.json()) as DashboardData;
+        if (!cancelled) setStage({ kind: "dashboard", data });
+      } catch (e) {
+        if (!cancelled) {
+          setError(e instanceof Error ? e.message : "Failed to load dashboard");
+          setStage({ kind: "dashboard", data: { progress: [], uiLang: "english" } });
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [status, stage.kind]);
+
+  async function reloadDashboard() {
+    setStage({ kind: "dashboard-loading" });
+  }
+
+  async function saveUiLang(uiLang: string) {
+    try {
+      await fetch("/api/dashboard", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ uiLang }),
+      });
+      if (stage.kind === "dashboard") {
+        setStage({ kind: "dashboard", data: { ...stage.data, uiLang } });
+      }
+    } catch {
+      // ignore — preference is purely cosmetic for now
+    }
+  }
 
   const sourceLabel = useMemo(() => LANGUAGES.find((l) => l.code === sourceLang)?.label, [sourceLang]);
   const targetLabel = useMemo(() => LANGUAGES.find((l) => l.code === targetLang)?.label, [targetLang]);
@@ -381,7 +438,7 @@ export default function Home() {
   }
 
   function reset() {
-    setStage({ kind: "picker" });
+    setStage({ kind: "dashboard-loading" });
     setError(null);
     setInput("");
   }
@@ -392,6 +449,217 @@ export default function Home() {
     target: s.targetWordCount,
     phraseN: s.currentN,
   });
+
+  /* ───────────── DASHBOARD LOADING ───────────── */
+  if (stage.kind === "dashboard-loading") {
+    return (
+      <Page>
+        <Masthead user={session?.user} />
+        <div className="flex-1 grid place-items-center px-9">
+          <p className="eyebrow">Loading your dashboard…</p>
+        </div>
+      </Page>
+    );
+  }
+
+  /* ───────────── DASHBOARD ───────────── */
+  if (stage.kind === "dashboard") {
+    const { progress, uiLang } = stage.data;
+    const totalPhrases = progress.reduce((sum, p) => sum + p.current_n, 0);
+    const totalWords = progress.reduce((sum, p) => sum + p.learned_word_count, 0);
+
+    async function handleStartFromDashboard() {
+      if (sourceLang === targetLang) {
+        setError("Pick two different languages.");
+        return;
+      }
+      await startSession();
+    }
+
+    return (
+      <Page>
+        <Masthead user={session?.user} />
+        <div className="flex-1 overflow-y-auto">
+          {/* Welcome header */}
+          <div className="px-10 lg:px-14 pt-12 pb-8 border-b border-rule">
+            <div className="eyebrow text-terracotta mb-3">Dashboard</div>
+            <h1 className="font-serif text-[42px] md:text-[48px] leading-[1.05] tracking-[-0.02em]">
+              {session?.user?.name ? (
+                <>
+                  Welcome back,
+                  <br />
+                  <span className="italic text-terracotta">{session.user.name.split(" ")[0]}</span>.
+                </>
+              ) : (
+                "Welcome back."
+              )}
+            </h1>
+            {session?.user?.email && (
+              <p className="text-[13px] text-ink-3 mt-2">{session.user.email}</p>
+            )}
+
+            {/* Stat cards */}
+            <div className="mt-8 grid grid-cols-3 gap-px bg-rule rounded-2xl overflow-hidden border border-rule max-w-[640px]">
+              <div className="bg-paper px-5 py-4">
+                <div className="font-serif text-3xl leading-none">{progress.length}</div>
+                <div className="eyebrow mt-2">Languages</div>
+              </div>
+              <div className="bg-paper px-5 py-4">
+                <div className="font-serif text-3xl leading-none">{totalPhrases}</div>
+                <div className="eyebrow mt-2">Phrases</div>
+              </div>
+              <div className="bg-paper px-5 py-4">
+                <div className="font-serif text-3xl leading-none">{totalWords}</div>
+                <div className="eyebrow mt-2">Words</div>
+              </div>
+            </div>
+          </div>
+
+          {/* Language progress table */}
+          <div className="px-10 lg:px-14 py-9 border-b border-rule">
+            <div className="flex items-baseline justify-between mb-5">
+              <div>
+                <div className="eyebrow text-good">● Your languages</div>
+                <h2 className="font-serif text-2xl mt-1">In progress</h2>
+              </div>
+              <div className="text-[11.5px] text-ink-3">{progress.length} active</div>
+            </div>
+
+            {progress.length === 0 ? (
+              <div className="bg-paper border border-rule rounded-2xl px-6 py-10 text-center">
+                <p className="font-serif text-2xl mb-1">Nothing started yet.</p>
+                <p className="text-[13px] text-ink-3">Pick a language below to begin.</p>
+              </div>
+            ) : (
+              <div className="space-y-3">
+                {progress.map((p) => {
+                  const lvl = LEVELS.find((l) => l.code === p.level);
+                  const target = lvl?.targetWords ?? 1;
+                  const pct = Math.min(100, Math.round((p.learned_word_count / target) * 100));
+                  const remaining = Math.max(0, target - p.learned_word_count);
+                  const srcLabel = LANGUAGES.find((l) => l.code === p.source_lang)?.label ?? p.source_lang;
+                  const tgtLabel = LANGUAGES.find((l) => l.code === p.target_lang)?.label ?? p.target_lang;
+                  return (
+                    <div
+                      key={`${p.source_lang}-${p.target_lang}-${p.level}`}
+                      className="bg-paper border border-rule rounded-2xl px-5 py-4"
+                    >
+                      <div className="flex items-baseline justify-between mb-2">
+                        <div className="font-serif text-[20px] leading-none">
+                          {srcLabel} <span className="text-ink-3">→</span>{" "}
+                          <span className="italic text-terracotta">{tgtLabel}</span>
+                        </div>
+                        <span className="font-mono text-[11px] text-ink-3 uppercase">{p.level}</span>
+                      </div>
+                      <div className="text-[12.5px] text-ink-2 tabular mb-3 flex flex-wrap gap-x-4 gap-y-1">
+                        <span>
+                          <span className="text-ink font-medium">{p.current_n}</span>
+                          <span className="text-ink-3"> phrases</span>
+                        </span>
+                        <span>
+                          <span className="text-ink font-medium">{p.learned_word_count}</span>
+                          <span className="text-ink-3"> / {target.toLocaleString()} words</span>
+                        </span>
+                        <span>
+                          <span className="text-terracotta font-medium">{remaining.toLocaleString()}</span>
+                          <span className="text-ink-3"> to go</span>
+                        </span>
+                        <span className="ml-auto font-mono text-ink">{pct}%</span>
+                      </div>
+                      <div className="h-1.5 bg-rule rounded-full overflow-hidden">
+                        <div
+                          className="h-full bg-ink rounded-full"
+                          style={{ width: `${pct}%` }}
+                        />
+                      </div>
+                      <button
+                        onClick={async () => {
+                          setSourceLang(p.source_lang as LanguageCode);
+                          setTargetLang(p.target_lang as LanguageCode);
+                          setLevel(p.level as LevelCode);
+                          await loadState();
+                        }}
+                        className="mt-3 text-[12px] text-terracotta hover:text-ink-2 font-medium inline-flex items-center gap-1"
+                      >
+                        Continue →
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+
+          {/* Start a new language */}
+          <div className="px-10 lg:px-14 py-9 border-b border-rule">
+            <div className="eyebrow text-terracotta mb-1">+ New</div>
+            <h2 className="font-serif text-2xl mb-5">Start a new language</h2>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 max-w-[640px]">
+              <FieldRow label="I speak">
+                <SelectField
+                  value={sourceLang}
+                  onChange={(v) => setSourceLang(v as LanguageCode)}
+                  options={LANGUAGES}
+                />
+              </FieldRow>
+              <FieldRow label="I want to learn">
+                <SelectField
+                  value={targetLang}
+                  onChange={(v) => setTargetLang(v as LanguageCode)}
+                  options={LANGUAGES}
+                  accent
+                />
+              </FieldRow>
+            </div>
+
+            <div className="mt-2 max-w-[640px]">
+              <FieldRow label="Level" last>
+                <LevelStrip active={level} onPick={setLevel} />
+              </FieldRow>
+            </div>
+
+            {error && <p className="text-bad text-sm mt-3">{error}</p>}
+
+            <button onClick={handleStartFromDashboard} className={`${PRIMARY_BTN} mt-5`}>
+              Begin session
+              <ArrowRight />
+            </button>
+          </div>
+
+          {/* Settings */}
+          <div className="px-10 lg:px-14 py-9">
+            <div className="eyebrow mb-1">Settings</div>
+            <h2 className="font-serif text-2xl mb-5">Preferences</h2>
+
+            <div className="max-w-[440px]">
+              <FieldRow label="Interface language" last>
+                <SelectField
+                  value={uiLang}
+                  onChange={(v) => saveUiLang(v)}
+                  options={LANGUAGES}
+                />
+              </FieldRow>
+              <p className="text-[11.5px] text-ink-3 mt-2">
+                Preference is saved to your account. Full UI translation is coming soon.
+              </p>
+            </div>
+          </div>
+        </div>
+        <Footer
+          left={<span>Signed in as {session?.user?.email}</span>}
+          right={
+            <button
+              onClick={() => signOut()}
+              className="text-[11px] text-ink-2 hover:text-ink underline underline-offset-2"
+            >
+              Sign out
+            </button>
+          }
+        />
+      </Page>
+    );
+  }
 
   /* ───────────── PICKER ───────────── */
   if (stage.kind === "picker") {

@@ -138,6 +138,36 @@ export async function getAllKnownWords(
   return [...seen];
 }
 
+export type DashboardRow = {
+  source_lang: string;
+  target_lang: string;
+  level: string;
+  current_n: number;
+  learned_word_count: number;
+};
+
+export async function getAllProgress(userId: string): Promise<DashboardRow[]> {
+  const sql = await getSql();
+  const rows = (await sql`
+    SELECT source_lang, target_lang, level, current_n, learned_word_count
+    FROM user_levels
+    WHERE user_id = ${userId}
+    ORDER BY last_session_at DESC NULLS LAST, level ASC
+  `) as Array<DashboardRow>;
+  return rows;
+}
+
+export async function getUiLang(userId: string): Promise<string> {
+  const sql = await getSql();
+  const rows = (await sql`SELECT ui_lang FROM users WHERE id = ${userId}`) as Array<{ ui_lang: string | null }>;
+  return rows[0]?.ui_lang ?? "english";
+}
+
+export async function setUiLang(userId: string, uiLang: string): Promise<void> {
+  const sql = await getSql();
+  await sql`UPDATE users SET ui_lang = ${uiLang} WHERE id = ${userId}`;
+}
+
 export async function getRecentPhraseTexts(
   userId: string,
   sourceLang: LanguageCode,

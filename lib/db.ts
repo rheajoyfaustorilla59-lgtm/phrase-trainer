@@ -27,6 +27,7 @@ async function init(): Promise<void> {
   await sql`ALTER TABLE users ADD COLUMN IF NOT EXISTS email TEXT`;
   await sql`ALTER TABLE users ADD COLUMN IF NOT EXISTS name TEXT`;
   await sql`ALTER TABLE users ADD COLUMN IF NOT EXISTS image TEXT`;
+  await sql`ALTER TABLE users ADD COLUMN IF NOT EXISTS ui_lang TEXT`;
   await sql`CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email ON users(email)`;
 
   await sql`
