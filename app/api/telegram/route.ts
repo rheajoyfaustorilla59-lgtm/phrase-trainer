@@ -224,34 +224,77 @@ async function startPractice(chatId: number, messageId?: number) {
   const srcLabel = getLangLabel(state.sourceLang ?? "");
   const tgtLabel = getLangLabel(state.targetLang ?? "");
 
-  // Fetch phrases from our API
-  try {
-    // We use the same session-phrases endpoint to get phrases
-    // For Telegram, we'll use a different approach: fetch active block or create one
-    const res = await fetch(
-      `${getBaseUrl()}/api/session-phrases?source=${state.sourceLang}&target=${state.targetLang}&level=${state.level}`,
-    );
-    if (!res.ok) {
-      // No block exists — tell user to use web app to create one first
-      await sendMessage(
-        chatId,
-        `🤔 No blocks found for ${srcLabel} → ${tgtLabel} (${state.level}).\n\nCreate a block first on the web app:\nhttps://phrase-trainer-pi.vercel.app\n\nThen come back here to practice! 📚`,
-      );
-      clearUserState(chatId);
-      return;
-    }
-    const data = await res.json();
-    const phrases = data.phrases ?? [];
-    const currentN = data.currentN ?? 0;
+  // Check if user is linked
+  const linkedUserId = await getUserIdByTelegramChat(chatId);
 
-    if (phrases.length === 0) {
+  try {
+    // Try fetching existing session (using linked user ID if available)
+    let sessionUrl = `${getBaseUrl()}/api/session-phrases?source=${state.sourceLang}&target=${state.targetLang}&level=${state.level}`;
+    if (linkedUserId) {
+      sessionUrl += `&telegram_user_id=${linkedUserId}`;
+    }
+
+    const res = await fetch(sessionUrl);
+
+    if (res.ok) {
+      const data = await res.json();
+      const phrases = data.phrases ?? [];
+      const currentN = data.currentN ?? 0;
+
+      if (phrases.length > 0) {
+        state.phrases = phrases.map((p: { phrase_index: number; source_text: string; target_text: string }) => ({
+          phrase_index: p.phrase_index,
+          source_text: p.source_text,
+          target_text: p.target_text,
+        }));
+        state.currentN = currentN;
+        setUserState(chatId, state);
+        await showCurrentPhrase(chatId, messageId);
+        return;
+      }
+    }
+
+    // No block — create one if user is linked
+    if (!linkedUserId) {
       await sendMessage(
         chatId,
-        `No phrases ready yet! Create a block on the web app first:\nhttps://phrase-trainer-pi.vercel.app`,
+        `🤔 No blocks found for ${srcLabel} → ${tgtLabel} (${state.level}).\n\nLink your Telegram account first via the web app dashboard, then try again! 📚`,
       );
       clearUserState(chatId);
       return;
     }
+
+    // Create a block automatically!
+    await sendMessage(chatId, `⏳ Creating a new block for you (${tgtLabel} · ${state.level})… This may take a moment.`);
+
+    const createRes = await fetch(`${getBaseUrl()}/api/blocks`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        sourceLang: state.sourceLang,
+        targetLang: state.targetLang,
+        level: state.level,
+        description: null, // auto-generate
+        telegramUserId: linkedUserId,
+      }),
+    });
+
+    if (!createRes.ok) {
+      const errData = await createRes.json().catch(() => ({}));
+      throw new Error(errData.error ?? "Failed to create block");
+    }
+
+    // Now fetch the freshly created session
+    const sessionRes = await fetch(
+      `${getBaseUrl()}/api/session-phrases?source=${state.sourceLang}&target=${state.targetLang}&level=${state.level}&telegram_user_id=${linkedUserId}`,
+    );
+    if (!sessionRes.ok) throw new Error("Failed to load session after creating block");
+
+    const sessionData = await sessionRes.json();
+    const phrases = sessionData.phrases ?? [];
+    const currentN = sessionData.currentN ?? 0;
+
+    if (phrases.length === 0) throw new Error("Block created but no phrases found");
 
     state.phrases = phrases.map((p: { phrase_index: number; source_text: string; target_text: string }) => ({
       phrase_index: p.phrase_index,
@@ -261,13 +304,22 @@ async function startPractice(chatId: number, messageId?: number) {
     state.currentN = currentN;
     setUserState(chatId, state);
 
-    // Show the first phrase
+    await sendMessage(chatId, `✨ Block created: "${sessionData.block?.description ?? "Auto-generated"}"`);
     await showCurrentPhrase(chatId, messageId);
   } catch (err) {
-    await sendMessage(
-      chatId,
-      `⚠️ Could not start practice. Try using the web app first:\nhttps://phrase-trainer-pi.vercel.app`,
-    );
+    const errorMsg = err instanceof Error ? err.message : "Unknown error";
+    console.error("startPractice error:", errorMsg);
+    if (linkedUserId) {
+      await sendMessage(
+        chatId,
+        `⚠️ Could not create a block. Error: ${errorMsg}`,
+      );
+    } else {
+      await sendMessage(
+        chatId,
+        `⚠️ No blocks found. Link your Telegram account first via the web app dashboard:\nhttps://phrase-trainer-pi.vercel.app`,
+      );
+    }
     clearUserState(chatId);
   }
 }

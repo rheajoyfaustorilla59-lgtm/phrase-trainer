@@ -41,21 +41,32 @@ export async function GET(req: Request) {
 
 export async function POST(req: Request) {
   try {
-    const session = await auth();
-    if (!session?.user?.email) {
-      return NextResponse.json({ error: "Not authenticated" }, { status: 401 });
-    }
     const body = (await req.json()) as {
       sourceLang: LanguageCode;
       targetLang: LanguageCode;
       level: LevelCode;
       description?: string | null;
+      telegramUserId?: string;
     };
-    const userId = await ensureUserByEmail(
-      session.user.email,
-      session.user.name,
-      session.user.image,
-    );
+
+    let userId: string;
+
+    if (body.telegramUserId) {
+      // Telegram-linked request
+      userId = body.telegramUserId;
+    } else {
+      // Normal web app request — require auth
+      const session = await auth();
+      if (!session?.user?.email) {
+        return NextResponse.json({ error: "Not authenticated" }, { status: 401 });
+      }
+      userId = await ensureUserByEmail(
+        session.user.email,
+        session.user.name,
+        session.user.image,
+      );
+    }
+
     await ensureUserLevel(userId, body.sourceLang, body.targetLang, body.level);
 
     const block = await createBlock(

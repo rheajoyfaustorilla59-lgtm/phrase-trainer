@@ -13,22 +13,34 @@ export const runtime = "nodejs";
 
 export async function GET(req: Request) {
   try {
-    const session = await auth();
-    if (!session?.user?.email) {
-      return NextResponse.json({ error: "Not authenticated" }, { status: 401 });
-    }
     const url = new URL(req.url);
     const sourceLang = url.searchParams.get("source") as LanguageCode | null;
     const targetLang = url.searchParams.get("target") as LanguageCode | null;
     const level = url.searchParams.get("level") as LevelCode | null;
+    const telegramUserId = url.searchParams.get("telegram_user_id");
+
     if (!sourceLang || !targetLang || !level) {
       return NextResponse.json({ error: "Missing source/target/level" }, { status: 400 });
     }
-    const userId = await ensureUserByEmail(
-      session.user.email,
-      session.user.name,
-      session.user.image,
-    );
+
+    let userId: string;
+
+    if (telegramUserId) {
+      // Telegram-linked request — use the provided user ID directly
+      userId = telegramUserId;
+    } else {
+      // Normal web app request — require auth
+      const session = await auth();
+      if (!session?.user?.email) {
+        return NextResponse.json({ error: "Not authenticated" }, { status: 401 });
+      }
+      userId = await ensureUserByEmail(
+        session.user.email,
+        session.user.name,
+        session.user.image,
+      );
+    }
+
     await ensureUserLevel(userId, sourceLang, targetLang, level);
     const progress = await getProgress(userId, sourceLang, targetLang, level);
     const block = await getActiveBlock(userId, sourceLang, targetLang, level);
