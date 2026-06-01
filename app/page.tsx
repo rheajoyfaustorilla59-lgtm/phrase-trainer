@@ -586,22 +586,26 @@ export default function Home() {
         setInput("");
         return;
       }
-      await advancePhrase(currentPhrase);
+      if (stage.mode === "test") {
+        // Typed the correct answer — now restart from phrase 1
+        const firstPhrase = stage.phrases[0];
+        setStage({
+          ...stage,
+          currentN: firstPhrase ? firstPhrase.phrase_index - 1 : 0,
+          mistake: null,
+          wrongByPhrase: {},
+        });
+        setInput("");
+      } else {
+        await advancePhrase(currentPhrase);
+      }
       return;
     }
 
     if (normalize(val) === normalize(currentPhrase.target_text)) {
       await advancePhrase(currentPhrase);
-    } else if (stage.mode === "test") {
-      const firstPhrase = stage.phrases[0];
-      setStage({
-        ...stage,
-        currentN: firstPhrase ? firstPhrase.phrase_index - 1 : 0,
-        mistake: null,
-        wrongByPhrase: {},
-      });
-      setInput("");
     } else {
+      // Both repeat and test: show the correct answer, require retyping
       const prev = stage.wrongByPhrase[currentPhrase.phrase_index] ?? [];
       setStage({
         ...stage,
@@ -1099,7 +1103,9 @@ export default function Home() {
                 >
                   <div className="eyebrow mb-2.5">
                     {stage.mistake
-                      ? "Type the correct answer to continue"
+                      ? stage.mode === "test"
+                        ? "Type the correct answer — then restart from phrase 1"
+                        : "Type the correct answer to continue"
                       : `Type in ${targetLabel}`}
                   </div>
                   <label className={INPUT_WRAP}>
