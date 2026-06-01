@@ -565,6 +565,25 @@ export async function createBlock(
   };
 }
 
+export async function getBlockById(
+  userId: string,
+  blockId: number,
+): Promise<BlockRow | null> {
+  const sql = await getSql();
+  const rows = (await sql`
+    SELECT
+      b.id,
+      b.block_index,
+      b.description,
+      b.phrase_count,
+      b.completed,
+      COALESCE((SELECT COUNT(*)::int FROM phrases p WHERE p.block_id = b.id), 0) AS delivered_count
+    FROM phrase_blocks b
+    WHERE b.id = ${blockId} AND b.user_id = ${userId}
+  `) as Array<BlockRow>;
+  return rows[0] ?? null;
+}
+
 export async function getBlockPhrases(
   userId: string,
   sourceLang: LanguageCode,

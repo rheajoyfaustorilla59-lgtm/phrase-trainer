@@ -58,13 +58,16 @@ type Stage =
   | { kind: "loading"; message?: string; blockGeneration?: boolean }
   | {
       kind: "session";
-      mode: "repeat" | "test";
+      mode: "repeat" | "test" | "cumulative";
       block: SessionBlock;
       phrases: PhraseItem[];
       currentN: number;
       submitting: boolean;
       mistake: { correct: string; wrong: string } | null;
       wrongByPhrase: Record<number, string[]>;
+      roundIndex?: number;
+      roundUnlocked?: number;
+      hadMistakeInRound?: boolean;
     }
   | { kind: "block-done"; block: SessionBlock; phrases: PhraseItem[]; words: string[]; wordCount: number };
 
@@ -528,6 +531,53 @@ export default function Home() {
     val = val.trim();
     if (!val) return;
 
+    if (stage.mode === "cumulative") {
+      const roundIndex = stage.roundIndex ?? 0;
+      const roundUnlocked = stage.roundUnlocked ?? 1;
+      const currentPhrase = stage.phrases[roundIndex];
+      if (!currentPhrase) return;
+
+      if (stage.mistake) {
+        if (normalize(val) !== normalize(stage.mistake.correct)) { setInput(""); return; }
+        // After retyping: continue round, mark as failed
+        setStage({ ...stage, roundIndex: roundIndex + 1 < roundUnlocked ? roundIndex + 1 : 0, mistake: null, hadMistakeInRound: true });
+        setInput("");
+        return;
+      }
+
+      if (normalize(val) === normalize(currentPhrase.target_text)) {
+        if (roundIndex < roundUnlocked - 1) {
+          // Continue this round
+          setStage({ ...stage, roundIndex: roundIndex + 1, mistake: null });
+          setInput("");
+        } else {
+          // End of round
+          const hadMistake = stage.hadMistakeInRound ?? false;
+          if (!hadMistake && roundUnlocked < stage.phrases.length) {
+            // Unlock next phrase
+            await advancePhrase(currentPhrase);
+          } else if (!hadMistake && roundUnlocked >= stage.phrases.length) {
+            // All phrases mastered!
+            await advancePhrase(currentPhrase);
+          } else {
+            // Had mistakes — restart round, no new phrase
+            setStage({ ...stage, roundIndex: 0, hadMistakeInRound: false, mistake: null });
+            setInput("");
+          }
+        }
+      } else {
+        const prev = stage.wrongByPhrase[currentPhrase.phrase_index] ?? [];
+        setStage({
+          ...stage,
+          mistake: { correct: currentPhrase.target_text, wrong: val },
+          hadMistakeInRound: true,
+          wrongByPhrase: { ...stage.wrongByPhrase, [currentPhrase.phrase_index]: [...prev, val] },
+        });
+        setInput("");
+      }
+      return;
+    }
+
     const currentPhrase = stage.phrases.find((p) => p.phrase_index > stage.currentN);
     if (!currentPhrase) return;
 
@@ -582,6 +632,24 @@ export default function Home() {
       });
       setStage((prev) => {
         if (prev.kind !== "session") return prev;
+
+        if (prev.mode === "cumulative") {
+          const newRoundUnlocked = (prev.roundUnlocked ?? 1) + 1;
+          if (newRoundUnlocked > prev.phrases.length) {
+            (async () => {
+              try {
+                const res = await fetch(`/api/known-words?source=${sourceLang}&target=${targetLang}&level=${level}`);
+                if (res.ok) {
+                  const data = (await res.json()) as KnownWordsData;
+                  setStage({ kind: "block-done", block: prev.block, phrases: prev.phrases, words: data.words, wordCount: data.count });
+                }
+              } catch {}
+            })();
+            return { kind: "block-done", block: prev.block, phrases: prev.phrases, words: [], wordCount: 0 };
+          }
+          return { ...prev, submitting: false, mistake: null, roundIndex: 0, roundUnlocked: newRoundUnlocked, hadMistakeInRound: false };
+        }
+
         const newCurrentN = phrase.phrase_index;
         const remaining = prev.phrases.filter((p) => p.phrase_index > newCurrentN);
         if (remaining.length === 0) {
@@ -605,13 +673,14 @@ export default function Home() {
     }
   }
 
-  async function loadBlockSession(src: string, tgt: string, lvl: string, mode: "repeat" | "test") {
+  async function loadBlockSession(src: string, tgt: string, lvl: string, mode: "repeat" | "test" | "cumulative", blockId?: number) {
     setSourceLang(src as LanguageCode);
     setTargetLang(tgt as LanguageCode);
     setLevel(lvl as LevelCode);
     setStage({ kind: "loading" });
     try {
-      const res = await fetch(`/api/session-phrases?source=${src}&target=${tgt}&level=${lvl}`);
+      const url = `/api/session-phrases?source=${src}&target=${tgt}&level=${lvl}${blockId ? `&blockId=${blockId}` : ""}`;
+      const res = await fetch(url);
       if (!res.ok) throw new Error();
       const data = await res.json();
       if (!data.block) { setStage({ kind: "block-create", submitting: false, error: null }); return; }
@@ -620,6 +689,7 @@ export default function Home() {
         block: data.block, phrases: data.phrases,
         currentN: data.currentN, submitting: false,
         mistake: null, wrongByPhrase: {},
+        ...(mode === "cumulative" ? { roundIndex: 0, roundUnlocked: 1, hadMistakeInRound: false } : {}),
       });
     } catch { setStage({ kind: "dashboard", data: emptyDashboard, refreshing: true }); }
   }
@@ -715,14 +785,21 @@ export default function Home() {
                               </div>
                               <div className="flex items-center gap-1.5 shrink-0">
                                 <button
-                                  onClick={() => { void loadBlockSession(p.source_lang, p.target_lang, p.level, "repeat"); }}
+                                  onClick={() => { void loadBlockSession(p.source_lang, p.target_lang, p.level, "cumulative", b.id); }}
+                                  className="text-[18px] bg-terracotta text-paper rounded-full px-2.5 py-1 font-medium hover:opacity-85 transition-colors"
+                                  title="Cumulative mode — new phrase only when all previous are perfect"
+                                >
+                                  📚 Learn
+                                </button>
+                                <button
+                                  onClick={() => { void loadBlockSession(p.source_lang, p.target_lang, p.level, "repeat", b.id); }}
                                   className="text-[18px] bg-ink text-paper rounded-full px-2.5 py-1 font-medium hover:bg-ink-2 transition-colors"
                                   title="Repeat mode — mistakes are forgiving"
                                 >
                                   🔁 Repeat
                                 </button>
                                 <button
-                                  onClick={() => { void loadBlockSession(p.source_lang, p.target_lang, p.level, "test"); }}
+                                  onClick={() => { void loadBlockSession(p.source_lang, p.target_lang, p.level, "test", b.id); }}
                                   className="text-[18px] border border-ink text-ink rounded-full px-2.5 py-1 font-medium hover:bg-ink hover:text-paper transition-colors"
                                   title="Test mode — one mistake resets everything"
                                 >
@@ -937,8 +1014,13 @@ export default function Home() {
   if (stage.kind === "session") {
     const sourceLabel = LANGUAGES.find((l) => l.code === sourceLang)?.label ?? sourceLang;
     const targetLabel = LANGUAGES.find((l) => l.code === targetLang)?.label ?? targetLang;
-    const currentPhrase = stage.phrases.find((p) => p.phrase_index > stage.currentN);
-    const doneCount = stage.phrases.filter((p) => p.phrase_index <= stage.currentN).length;
+    const isCumulative = stage.mode === "cumulative";
+    const roundIndex = stage.roundIndex ?? 0;
+    const roundUnlocked = stage.roundUnlocked ?? 1;
+    const currentPhrase = isCumulative
+      ? stage.phrases[roundIndex]
+      : stage.phrases.find((p) => p.phrase_index > stage.currentN);
+    const doneCount = isCumulative ? roundUnlocked - 1 : stage.phrases.filter((p) => p.phrase_index <= stage.currentN).length;
     const totalCount = stage.phrases.length;
 
     return (
@@ -961,10 +1043,13 @@ export default function Home() {
                 <div className="flex items-center justify-between mb-6">
                   <div className="flex items-center gap-3">
                     <span className="eyebrow">
-                      {stage.mode === "test" ? "📝 Test" : "🔁 Repeat"} · Phrase {doneCount + 1} of {totalCount}
+                      {isCumulative
+                        ? `📚 Learn · Round phrase ${roundIndex + 1} of ${roundUnlocked}${stage.hadMistakeInRound ? " · ✗ redo round" : ""}`
+                        : stage.mode === "test" ? `📝 Test · Phrase ${doneCount + 1} of ${totalCount}`
+                        : `🔁 Repeat · Phrase ${doneCount + 1} of ${totalCount}`}
                     </span>
                   </div>
-                  <BlockDots done={doneCount} total={totalCount} />
+                  <BlockDots done={isCumulative ? roundIndex : doneCount} total={isCumulative ? roundUnlocked : totalCount} />
                 </div>
 
                 {stage.mistake ? (
@@ -1130,6 +1215,10 @@ export default function Home() {
         <div className="px-9 py-4 border-t border-rule flex items-center gap-4">
           {stage.mistake ? (
             <span className="text-[15px] text-bad font-medium shrink-0">● Type the correct answer to continue</span>
+          ) : isCumulative ? (
+            <span className="text-[15px] text-ink-2 shrink-0">
+              {roundUnlocked - 1} <span className="text-ink-3">/ {totalCount} mastered</span>
+            </span>
           ) : (
             <span className="text-[15px] text-ink-2 shrink-0">
               {doneCount} <span className="text-ink-3">/ {totalCount}</span>
@@ -1137,12 +1226,12 @@ export default function Home() {
           )}
           <div className="flex-1 h-2 bg-rule rounded-full overflow-hidden">
             <div
-              className="h-full bg-good rounded-full transition-all duration-500"
-              style={{ width: `${totalCount > 0 ? (doneCount / totalCount) * 100 : 0}%` }}
+              className={`h-full rounded-full transition-all duration-500 ${isCumulative && stage.hadMistakeInRound ? "bg-terracotta" : "bg-good"}`}
+              style={{ width: `${totalCount > 0 ? (isCumulative ? ((roundUnlocked - 1) / totalCount) * 100 : (doneCount / totalCount) * 100) : 0}%` }}
             />
           </div>
           <span className="text-[15px] text-ink-3 shrink-0 tabular">
-            {totalCount > 0 ? Math.round((doneCount / totalCount) * 100) : 0}%
+            {totalCount > 0 ? Math.round((isCumulative ? (roundUnlocked - 1) : doneCount) / totalCount * 100) : 0}%
           </span>
         </div>
       </Page>
@@ -1413,10 +1502,11 @@ function BlockGenerationSteps() {
 
 function Page({ children }: { children: React.ReactNode }) {
   return (
-    <main className="min-h-screen flex items-center justify-center p-4 md:p-8">
-      <div className="w-full max-w-[1100px] min-h-[720px] bg-cream rounded-3xl border border-rule shadow-[0_30px_80px_-30px_rgba(26,23,20,0.25)] flex flex-col overflow-hidden">
+    <main className="min-h-screen flex flex-col bg-cream">
+      <div className="flex-1 flex flex-col">
         {children}
       </div>
+      <ChatWidget />
     </main>
   );
 }
@@ -1736,5 +1826,244 @@ function BlockCreateView({
         right={<span>~30 seconds to generate</span>}
       />
     </Page>
+  );
+}
+
+/* ─── Chat Widget ─── */
+
+type ChatMessage = { role: "user" | "assistant"; content: string };
+
+function ChatWidget() {
+  const { status } = useSession();
+  const [open, setOpen] = useState(false);
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [input, setInput] = useState("");
+  const [streaming, setStreaming] = useState(false);
+  const [aiName, setAiName] = useState(() => {
+    if (typeof window !== "undefined") return localStorage.getItem("aiName") ?? "AI Assistant";
+    return "AI Assistant";
+  });
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [renaming, setRenaming] = useState(false);
+  const [renameInput, setRenameInput] = useState("");
+  const bottomRef = useRef<HTMLDivElement>(null);
+  const chatInputRef = useRef<HTMLInputElement>(null);
+  const renameRef = useRef<HTMLInputElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (open) setTimeout(() => chatInputRef.current?.focus(), 100);
+  }, [open]);
+
+  useEffect(() => {
+    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [messages]);
+
+  useEffect(() => {
+    if (renaming) setTimeout(() => renameRef.current?.focus(), 50);
+  }, [renaming]);
+
+  useEffect(() => {
+    function handleClick(e: MouseEvent) {
+      if (menuRef.current && !menuRef.current.contains(e.target as Node)) setMenuOpen(false);
+    }
+    document.addEventListener("mousedown", handleClick);
+    return () => document.removeEventListener("mousedown", handleClick);
+  }, []);
+
+  if (status !== "authenticated") return null;
+
+  function saveName() {
+    const name = renameInput.trim() || "AI Assistant";
+    setAiName(name);
+    localStorage.setItem("aiName", name);
+    setRenaming(false);
+    setMenuOpen(false);
+  }
+
+  async function send() {
+    const text = input.trim();
+    if (!text || streaming) return;
+    const newMessages: ChatMessage[] = [...messages, { role: "user", content: text }];
+    setMessages([...newMessages, { role: "assistant", content: "" }]);
+    setInput("");
+    setStreaming(true);
+    try {
+      const res = await fetch("/api/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ messages: newMessages }),
+      });
+      if (!res.ok || !res.body) throw new Error("Failed");
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        const chunk = decoder.decode(value);
+        setMessages((prev) => {
+          const updated = [...prev];
+          const last = updated[updated.length - 1];
+          if (last?.role === "assistant") {
+            updated[updated.length - 1] = { ...last, content: last.content + chunk };
+          }
+          return updated;
+        });
+      }
+    } catch {
+      setMessages((prev) => {
+        const updated = [...prev];
+        const last = updated[updated.length - 1];
+        if (last?.role === "assistant" && !last.content) {
+          updated[updated.length - 1] = { ...last, content: "Something went wrong. Try again." };
+        }
+        return updated;
+      });
+    } finally {
+      setStreaming(false);
+      setTimeout(() => chatInputRef.current?.focus(), 0);
+    }
+  }
+
+  return (
+    <div className="fixed bottom-6 right-6 z-50 flex flex-col items-end gap-3">
+      {open && (
+        <div className="w-[360px] h-[500px] bg-paper border border-rule rounded-2xl shadow-[0_24px_64px_-16px_rgba(26,23,20,0.35)] flex flex-col overflow-hidden">
+          <div className="flex items-center justify-between px-4 py-3 border-b border-rule shrink-0">
+            <div className="flex items-center gap-2.5 min-w-0">
+              <div className="w-2 h-2 rounded-full bg-good shrink-0" />
+              {renaming ? (
+                <form onSubmit={(e) => { e.preventDefault(); saveName(); }} className="flex items-center gap-1.5">
+                  <input
+                    ref={renameRef}
+                    value={renameInput}
+                    onChange={(e) => setRenameInput(e.target.value)}
+                    className="text-[14px] font-medium text-ink bg-cream border border-rule rounded-lg px-2 py-0.5 outline-none w-[130px]"
+                    placeholder="Enter a name…"
+                  />
+                  <button type="submit" className="text-[12px] text-good font-medium hover:underline">Save</button>
+                  <button type="button" onClick={() => setRenaming(false)} className="text-[12px] text-ink-3 hover:underline">Cancel</button>
+                </form>
+              ) : (
+                <span className="font-medium text-[15px] text-ink truncate">{aiName}</span>
+              )}
+            </div>
+            <div className="flex items-center gap-1 shrink-0">
+              <div className="relative" ref={menuRef}>
+                <button
+                  onClick={() => setMenuOpen((v) => !v)}
+                  className="w-7 h-7 flex items-center justify-center rounded-full text-ink-3 hover:text-ink hover:bg-cream transition-colors"
+                  title="Options"
+                >
+                  <svg width="14" height="4" viewBox="0 0 14 4" fill="none" aria-hidden="true">
+                    <circle cx="2" cy="2" r="1.4" fill="currentColor"/>
+                    <circle cx="7" cy="2" r="1.4" fill="currentColor"/>
+                    <circle cx="12" cy="2" r="1.4" fill="currentColor"/>
+                  </svg>
+                </button>
+                {menuOpen && (
+                  <div className="absolute right-0 top-9 w-[170px] bg-paper border border-rule rounded-xl shadow-[0_8px_24px_-8px_rgba(26,23,20,0.2)] overflow-hidden z-10">
+                    <button
+                      onClick={() => { setRenameInput(aiName); setRenaming(true); setMenuOpen(false); }}
+                      className="w-full flex items-center gap-2.5 px-3.5 py-2.5 text-[13px] text-ink hover:bg-cream text-left"
+                    >
+                      ✏️ Rename AI
+                    </button>
+                    <button
+                      onClick={() => { setMessages([]); setMenuOpen(false); }}
+                      className="w-full flex items-center gap-2.5 px-3.5 py-2.5 text-[13px] text-ink hover:bg-cream text-left border-t border-rule"
+                    >
+                      🗑️ Clear chat
+                    </button>
+                  </div>
+                )}
+              </div>
+              <button
+                onClick={() => setOpen(false)}
+                className="w-7 h-7 flex items-center justify-center rounded-full text-ink-3 hover:text-ink hover:bg-cream transition-colors text-[16px]"
+              >
+                ✕
+              </button>
+            </div>
+          </div>
+
+          <div className="flex-1 overflow-y-auto px-4 py-3 space-y-3">
+            {messages.length === 0 && (
+              <p className="text-[13px] text-ink-3 italic text-center mt-8">
+                Ask me anything — language tips, grammar, or just chat!
+              </p>
+            )}
+            {messages.map((msg, i) => (
+              <div key={i} className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"}`}>
+                <div
+                  className={`max-w-[82%] rounded-2xl px-3.5 py-2.5 text-[14px] leading-relaxed whitespace-pre-wrap ${
+                    msg.role === "user"
+                      ? "bg-ink text-paper rounded-br-sm"
+                      : "bg-cream border border-rule text-ink rounded-bl-sm"
+                  }`}
+                >
+                  {msg.content || (
+                    <span className="flex gap-1 items-center py-0.5">
+                      {[0, 0.2, 0.4].map((d) => (
+                        <span
+                          key={d}
+                          className="w-1.5 h-1.5 bg-ink-3 rounded-full"
+                          style={{ animation: `blink 1.4s infinite ${d}s` }}
+                        />
+                      ))}
+                    </span>
+                  )}
+                </div>
+              </div>
+            ))}
+            <div ref={bottomRef} />
+          </div>
+
+          <form
+            onSubmit={(e) => { e.preventDefault(); void send(); }}
+            className="px-3 py-3 border-t border-rule shrink-0"
+          >
+            <div className="flex items-center gap-2 bg-cream border border-rule rounded-xl px-3 py-2">
+              <input
+                ref={chatInputRef}
+                value={input}
+                onChange={(e) => setInput(e.target.value)}
+                placeholder="Ask anything…"
+                disabled={streaming}
+                className="flex-1 bg-transparent text-[14px] text-ink placeholder:text-ink-3 outline-none"
+              />
+              <button
+                type="submit"
+                disabled={!input.trim() || streaming}
+                className="w-7 h-7 rounded-full bg-ink text-paper flex items-center justify-center disabled:opacity-30 transition-opacity shrink-0"
+              >
+                <svg width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true">
+                  <path d="M1 11L11 1M11 1H4M11 1V8" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+                </svg>
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
+
+      <button
+        onClick={() => setOpen((v) => !v)}
+        className="w-14 h-14 rounded-full bg-ink text-paper shadow-[0_8px_24px_-8px_rgba(26,23,20,0.5)] flex items-center justify-center hover:bg-ink-2 transition-colors"
+        title="Chat with AI"
+      >
+        {open ? (
+          <svg width="18" height="18" viewBox="0 0 18 18" fill="none" aria-hidden="true">
+            <path d="M2 2L16 16M16 2L2 16" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"/>
+          </svg>
+        ) : (
+          <svg width="20" height="20" viewBox="0 0 20 20" fill="none" aria-hidden="true">
+            <path d="M2 10C2 5.58 5.58 2 10 2C14.42 2 18 5.58 18 10C18 14.42 14.42 18 10 18H2L4.5 15.5C3.01 14.17 2 12.19 2 10Z" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round" fill="none"/>
+            <circle cx="7" cy="10" r="1" fill="currentColor"/>
+            <circle cx="10" cy="10" r="1" fill="currentColor"/>
+            <circle cx="13" cy="10" r="1" fill="currentColor"/>
+          </svg>
+        )}
+      </button>
+    </div>
   );
 }

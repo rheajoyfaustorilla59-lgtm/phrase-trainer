@@ -5,6 +5,7 @@ import {
   ensureUserLevel,
   getProgress,
   getActiveBlock,
+  getBlockById,
   getBlockPhrases,
 } from "@/lib/session";
 import type { LanguageCode, LevelCode } from "@/lib/languages";
@@ -18,6 +19,7 @@ export async function GET(req: Request) {
     const targetLang = url.searchParams.get("target") as LanguageCode | null;
     const level = url.searchParams.get("level") as LevelCode | null;
     const telegramUserId = url.searchParams.get("telegram_user_id");
+    const blockIdParam = url.searchParams.get("blockId");
 
     if (!sourceLang || !targetLang || !level) {
       return NextResponse.json({ error: "Missing source/target/level" }, { status: 400 });
@@ -43,7 +45,14 @@ export async function GET(req: Request) {
 
     await ensureUserLevel(userId, sourceLang, targetLang, level);
     const progress = await getProgress(userId, sourceLang, targetLang, level);
-    const block = await getActiveBlock(userId, sourceLang, targetLang, level);
+
+    let block;
+    if (blockIdParam) {
+      block = await getBlockById(userId, parseInt(blockIdParam, 10));
+    } else {
+      block = await getActiveBlock(userId, sourceLang, targetLang, level);
+    }
+
     if (!block) {
       return NextResponse.json({ currentN: progress.current_n, block: null, phrases: [] });
     }
