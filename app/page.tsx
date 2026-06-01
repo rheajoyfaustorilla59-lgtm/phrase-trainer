@@ -45,10 +45,18 @@ type KnownWordsData = {
   count: number;
 };
 
+type LeaderboardEntry = {
+  name: string | null;
+  image: string | null;
+  totalWords: number;
+  streak: number;
+};
+
 type DashboardData = {
   progress: ProgressRow[];
   blocksByLang: Record<string, BlockSummary[]>;
   uiLang: string;
+  streak: number;
 };
 
 type Stage =
@@ -299,10 +307,13 @@ export default function Home() {
   const [sourceLang, setSourceLang] = useState<LanguageCode>("english");
   const [targetLang, setTargetLang] = useState<LanguageCode>("cebuano");
   const [level, setLevel] = useState<LevelCode>("A1");
-  const emptyDashboard: DashboardData = { progress: [], blocksByLang: {}, uiLang: "english" };
+  const emptyDashboard: DashboardData = { progress: [], blocksByLang: {}, uiLang: "english", streak: 0 };
   const [stage, setStage] = useState<Stage>({ kind: "landing" });
   const [input, setInput] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const [leaderboard, setLeaderboard] = useState<LeaderboardEntry[]>([]);
+  const [leaderboardLoading, setLeaderboardLoading] = useState(false);
+  const beginSessionRef = useRef<HTMLDivElement>(null);
   const [phrasesModal, setPhrasesModal] = useState<{
     source: string;
     target: string;
@@ -336,6 +347,23 @@ export default function Home() {
           setStage({ kind: "dashboard", data: emptyDashboard, refreshing: false });
         }
       }
+    })();
+    return () => { cancelled = true; };
+  }, [status, stage.kind]);
+
+  useEffect(() => {
+    if (status !== "authenticated") return;
+    if (stage.kind !== "dashboard") return;
+    let cancelled = false;
+    setLeaderboardLoading(true);
+    (async () => {
+      try {
+        const res = await fetch("/api/leaderboard");
+        if (!res.ok) throw new Error();
+        const data = (await res.json()) as LeaderboardEntry[];
+        if (!cancelled) setLeaderboard(data);
+      } catch {}
+      finally { if (!cancelled) setLeaderboardLoading(false); }
     })();
     return () => { cancelled = true; };
   }, [status, stage.kind]);
@@ -701,13 +729,23 @@ export default function Home() {
   /* ─── DASHBOARD ─── */
 
   if (stage.kind === "dashboard") {
-    const { progress, blocksByLang } = stage.data;
+    const { progress, blocksByLang, streak } = stage.data;
     const isRefreshing = stage.refreshing ?? false;
     return (
       <>
       <Page>
         <Masthead user={session?.user} />
         <div className="flex-1 overflow-y-auto">
+          {/* Streak banner */}
+          {streak > 0 && (
+            <div className="px-10 lg:px-14 pt-5 pb-0">
+              <div className="inline-flex items-center gap-2 bg-paper border border-rule rounded-full px-4 py-2">
+                <span className="text-[20px]">🔥</span>
+                <span className="text-[16px] font-medium text-ink">{streak}-day streak</span>
+                <span className="text-[15px] text-ink-3">Keep it up!</span>
+              </div>
+            </div>
+          )}
           {/* In-progress languages */}
           <div className="px-10 lg:px-14 py-9 border-b border-rule">
             <div className="eyebrow text-good mb-5">● In progress</div>
@@ -765,6 +803,23 @@ export default function Home() {
                           </button>
                         </div>
                       </div>
+
+                      {/* Skill Tree */}
+                      <SkillTree
+                        sourceLang={p.source_lang}
+                        targetLang={p.target_lang}
+                        allProgress={progress}
+                        onLevelClick={(lvl, status) => {
+                          if (status === "not-started") {
+                            setSourceLang(p.source_lang as LanguageCode);
+                            setTargetLang(p.target_lang as LanguageCode);
+                            setLevel(lvl as LevelCode);
+                            beginSessionRef.current?.scrollIntoView({ behavior: "smooth" });
+                          } else {
+                            void loadBlockSession(p.source_lang, p.target_lang, lvl, "repeat");
+                          }
+                        }}
+                      />
 
                       {/* Block list */}
                       <div className="space-y-2">
@@ -850,7 +905,7 @@ export default function Home() {
           </div>
 
           {/* Start new */}
-          <div className="px-10 lg:px-14 py-9">
+          <div ref={beginSessionRef} className="px-10 lg:px-14 py-9">
             <div className="eyebrow text-terracotta mb-1">+ New</div>
             <h2 className="font-serif text-2xl mb-5">Start a new language</h2>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4 max-w-[640px]">
@@ -883,6 +938,45 @@ export default function Home() {
               Begin session
               <ArrowRight />
             </button>
+          </div>
+
+          {/* Leaderboard */}
+          <div className="px-10 lg:px-14 py-9 border-t border-rule">
+            <div className="eyebrow text-terracotta mb-5">🏆 Leaderboard</div>
+            {leaderboardLoading ? (
+              <p className="text-[18px] text-ink-3 italic animate-pulse">Loading…</p>
+            ) : leaderboard.length === 0 ? (
+              <p className="text-[18px] text-ink-3 italic">No entries yet — be the first!</p>
+            ) : (
+              <div className="space-y-2 max-w-[600px]">
+                {leaderboard.map((entry, i) => {
+                  const isMe = entry.name === session?.user?.name && entry.image === session?.user?.image;
+                  return (
+                    <div
+                      key={i}
+                      className={`flex items-center gap-3 px-4 py-3 rounded-xl border ${isMe ? "border-terracotta bg-terracotta/5" : "border-rule bg-paper"}`}
+                    >
+                      <span className="font-mono text-[15px] text-ink-3 w-5 shrink-0">#{i + 1}</span>
+                      {entry.image ? (
+                        // eslint-disable-next-line @next/next/no-img-element
+                        <img src={entry.image} alt={entry.name ?? "User"} className="w-7 h-7 rounded-full shrink-0" />
+                      ) : (
+                        <div className="w-7 h-7 rounded-full bg-good/20 flex items-center justify-center text-[14px] font-medium text-good shrink-0">
+                          {(entry.name ?? "?").charAt(0).toUpperCase()}
+                        </div>
+                      )}
+                      <span className="flex-1 text-[16px] font-medium text-ink truncate">
+                        {entry.name ?? "Anonymous"}{isMe && <span className="ml-1.5 text-[13px] text-terracotta font-normal">you</span>}
+                      </span>
+                      {entry.streak > 0 && (
+                        <span className="text-[14px] text-ink-3 shrink-0">🔥 {entry.streak}</span>
+                      )}
+                      <span className="text-[15px] font-medium text-ink shrink-0">{entry.totalWords.toLocaleString()} words</span>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
           </div>
 
           {/* Link Telegram — compact */}
@@ -1832,6 +1926,66 @@ function BlockCreateView({
         right={<span>~30 seconds to generate</span>}
       />
     </Page>
+  );
+}
+
+/* ─── Skill Tree ─── */
+
+function SkillTree({
+  sourceLang,
+  targetLang,
+  allProgress,
+  onLevelClick,
+}: {
+  sourceLang: string;
+  targetLang: string;
+  allProgress: ProgressRow[];
+  onLevelClick: (level: string, status: "not-started" | "in-progress" | "done") => void;
+}) {
+  return (
+    <div className="mb-3">
+      <div className="eyebrow mb-2">Skill tree</div>
+      <div className="flex gap-1.5 flex-wrap">
+        {LEVELS.map((l) => {
+          const row = allProgress.find(
+            (r) => r.source_lang === sourceLang && r.target_lang === targetLang && r.level === l.code,
+          );
+          const status: "not-started" | "in-progress" | "done" = !row
+            ? "not-started"
+            : row.learned_word_count >= l.targetWords
+            ? "done"
+            : "in-progress";
+
+          return (
+            <button
+              key={l.code}
+              type="button"
+              onClick={() => onLevelClick(l.code, status)}
+              title={status === "not-started" ? `Start ${l.code}` : `Open ${l.code} session`}
+              className={`flex flex-col items-center px-3 py-2 rounded-xl border transition-colors min-w-[52px] ${
+                status === "done"
+                  ? "border-good bg-good/10 hover:bg-good/20"
+                  : status === "in-progress"
+                  ? "border-terracotta bg-terracotta/10 hover:bg-terracotta/20"
+                  : "border-rule bg-paper opacity-50 hover:opacity-80"
+              }`}
+            >
+              <span className="font-mono text-[13px] font-semibold text-ink">{l.code}</span>
+              <span className="text-[12px] mt-0.5">
+                {status === "done" ? "✓" : status === "in-progress" ? "▶" : "🔒"}
+              </span>
+              {row && (
+                <span className="text-[11px] text-ink-3 tabular mt-0.5">
+                  {row.learned_word_count >= 1000
+                    ? `${(row.learned_word_count / 1000).toFixed(1)}k`
+                    : row.learned_word_count}
+                </span>
+              )}
+            </button>
+          );
+        })}
+      </div>
+    </div>
   );
 }
 

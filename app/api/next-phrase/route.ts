@@ -5,6 +5,7 @@ import {
   ensureUserLevel,
   getNextPendingPhrase,
   markPhraseLearned,
+  updateStreak,
 } from "@/lib/session";
 import type { LanguageCode, LevelCode } from "@/lib/languages";
 
@@ -51,6 +52,8 @@ export async function POST(req: Request) {
       phrase.phrase_index,
       phrase.new_words.length,
     );
+
+    await updateStreak(userId);
 
     return NextResponse.json({ phrase });
   } catch (err) {

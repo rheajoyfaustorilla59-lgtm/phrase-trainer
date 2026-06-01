@@ -3,6 +3,80 @@ import { tokenizeWords, generatePhrase, generateBlock } from "./deepseek";
 import type { LanguageCode, LevelCode } from "./languages";
 import { randomUUID } from "crypto";
 
+export async function ensureStreakColumns(): Promise<void> {
+  const sql = await getSql();
+  await sql`ALTER TABLE users ADD COLUMN IF NOT EXISTS streak_days INT DEFAULT 0`;
+  await sql`ALTER TABLE users ADD COLUMN IF NOT EXISTS last_practice_date TEXT`;
+}
+
+export async function updateStreak(userId: string): Promise<number> {
+  const sql = await getSql();
+  const today = new Date().toISOString().slice(0, 10);
+  const yesterday = new Date(Date.now() - 86400000).toISOString().slice(0, 10);
+
+  const rows = (await sql`
+    SELECT streak_days, last_practice_date FROM users WHERE id = ${userId}
+  `) as Array<{ streak_days: number | null; last_practice_date: string | null }>;
+  const row = rows[0];
+  if (!row) return 0;
+
+  const lastDate = row.last_practice_date;
+  const currentStreak = row.streak_days ?? 0;
+
+  if (lastDate === today) return currentStreak;
+
+  let newStreak: number;
+  if (lastDate === yesterday) {
+    newStreak = currentStreak + 1;
+  } else {
+    newStreak = 1;
+  }
+
+  await sql`
+    UPDATE users SET streak_days = ${newStreak}, last_practice_date = ${today}
+    WHERE id = ${userId}
+  `;
+  return newStreak;
+}
+
+export async function getStreak(userId: string): Promise<number> {
+  const sql = await getSql();
+  const rows = (await sql`
+    SELECT streak_days FROM users WHERE id = ${userId}
+  `) as Array<{ streak_days: number | null }>;
+  return rows[0]?.streak_days ?? 0;
+}
+
+export type LeaderboardEntry = {
+  name: string | null;
+  image: string | null;
+  totalWords: number;
+  streak: number;
+};
+
+export async function getLeaderboard(): Promise<LeaderboardEntry[]> {
+  const sql = await getSql();
+  const rows = (await sql`
+    SELECT
+      u.name,
+      u.image,
+      COALESCE(SUM(ul.learned_word_count), 0)::int AS total_words,
+      COALESCE(u.streak_days, 0)::int AS streak_days
+    FROM users u
+    JOIN user_levels ul ON ul.user_id = u.id
+    WHERE u.email IS NOT NULL
+    GROUP BY u.id, u.name, u.image, u.streak_days
+    ORDER BY total_words DESC
+    LIMIT 10
+  `) as Array<{ name: string | null; image: string | null; total_words: number; streak_days: number }>;
+  return rows.map((r) => ({
+    name: r.name,
+    image: r.image,
+    totalWords: r.total_words,
+    streak: r.streak_days,
+  }));
+}
+
 export const BLOCK_SIZE = 20;
 
 export const WINDOW_SIZE = 20;
