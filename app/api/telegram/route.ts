@@ -281,7 +281,8 @@ async function startPractice(chatId: number, messageId?: number) {
 
     if (!createRes.ok) {
       const errData = await createRes.json().catch(() => ({}));
-      throw new Error(errData.error ?? "Failed to create block");
+      console.error("Block creation failed:", createRes.status, JSON.stringify(errData));
+      throw new Error(errData.error ?? `Server responded with ${createRes.status}`);
     }
 
     // Now fetch the freshly created session

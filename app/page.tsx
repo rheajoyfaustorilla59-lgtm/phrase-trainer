@@ -52,10 +52,10 @@ type DashboardData = {
 };
 
 type Stage =
-  | { kind: "dashboard-loading" }
-  | { kind: "dashboard"; data: DashboardData }
+  | { kind: "landing" }
+  | { kind: "dashboard"; data: DashboardData; refreshing?: boolean }
   | { kind: "block-create"; submitting: boolean; error: string | null }
-  | { kind: "loading" }
+  | { kind: "loading"; message?: string; blockGeneration?: boolean }
   | {
       kind: "session";
       mode: "repeat" | "test";
@@ -71,51 +71,53 @@ type Stage =
 /* ─── Funny quotes (English) ─── */
 
 const FUNNY_QUOTES = [
-  "Your brain is 70% water. The other 30% is just trying to remember one word.",
-  "You're not slow — your brain is just buffering. Dial-up era vibes.",
-  "Languages are free. Pride is expensive. Go make mistakes.",
-  "One day you'll speak fluently. Today is not that day. But tomorrow? Also no.",
-  "You're learning a whole new way to say 'where's the bathroom'. Legend.",
-  "Every language has that one word your mouth refuses to pronounce.",
-  "Speaking a new language is like walking in clown shoes. Awkward but fun.",
-  "You're basically a baby with a keyboard. Keep typing, genius.",
-  "The AI is cheering for you. Mostly because it needs entertainment.",
-  "Your accent is chef's kiss. No one else sounds like you. That's the point.",
-  "If Google Translate could judge, you'd get a participation trophy.",
-  "Learning languages burns calories. You're basically at the gym right now.",
-  "Your tongue is learning gymnastics. Gold medal incoming.",
-  "You know what's hard? Everything. But here you are. Go you.",
-  "Learning a language is like assembling IKEA furniture. Confusing, frustrating, but beautiful in the end.",
-  "Cebuano has 47 ways to say 'that'. You've got this. Maybe.",
-  "Every wrong answer is one step closer to being a local. Take that step.",
-  "Your keyboard is your teacher now. Show it respect by pressing the right keys.",
-  "Fluency is just a bunch of mistakes that gave up. Keep making them.",
-  "Your brain is creating new neural pathways. Also new ways to be wrong.",
-  "A journey of a thousand miles begins with one typo.",
-  "The AI has seen worse today. Probably. Maybe. We hope.",
-  "You're not just learning words — you're learning to laugh at yourself. Growth.",
-  "Sige lang, padayon! (That's Cebuano for 'keep going'). See? You're learning already.",
+  "You opened the app. That's the hardest part. Probably.",
+  "Fluency is just failure with better posture.",
+  "Somewhere a native speaker sneezed. That's your motivation now.",
+  "You're not bad at this. You're just pre-good.",
+  "Learning a language builds character. Yours is being built very slowly.",
+  "The app doesn't judge. The AI, however, absolutely does.",
+  "One day you'll dream in this language. Tonight you'll just have nightmares about vocabulary.",
+  "Your phone autocorrects your English. Imagine what it thinks of this.",
+  "Bilingual people exist. You're going to join them. Someday. No rush. (There's a rush.)",
+  "Every phrase you learn is a phrase you can use to embarrass yourself internationally.",
+  "The secret to fluency: say the wrong thing loudly enough times until it sounds right.",
+  "You're literally training your brain. This is a workout. You're basically at the gym.",
+  "Progress is progress even when it looks like 'Whaaat is this.'",
+  "A wise person once said: just do the reps. That wise person had bad grammar too.",
+  "You chose to learn a language instead of watching Netflix. Respect. Questionable, but respect.",
+  "This app is rooting for you. Your phone's battery is not.",
+  "The goal isn't perfection. The goal is to order food without pointing at the menu.",
+  "Somewhere, a toddler speaks this language fluently. Do not think about the toddler.",
+  "Your future self will thank you. Your current self is mildly suffering. Balance.",
+  "Language learning tip: it gets easier right after it gets much, much harder.",
+  "You're doing amazing sweetie. No really. Keep going. Bestie we're watching.",
 ];
 
 const MISTAKE_JOKES = [
-  "That was… bold. We respect boldness here.",
-  "Not even close. But you have style. We love style.",
-  "If confidence was a language, you'd be fluent. Wrong, but fluent.",
-  "Oof size: large. But hey, you pressed a key. Progress.",
-  "Your guess was creative. The AI is taking notes.",
-  "Wrong. But you made the app giggle. That's a feature.",
-  "That answer belongs in a museum. Of bad answers. But still a museum!",
-  "The correct answer is judging you silently. Don't worry, it forgives.",
-  "You typed something! That's more than most people do in bed. Wait—",
-  "Incorrect, but delivered with ✨flair✨. We love a dramatic wrong answer.",
-  "Your keyboard tried its best. It's not its fault.",
-  "Not quite. But you're one mistake closer to getting it right. Math checks out.",
-  "Boom! Wrong again! Consistency is key.",
-  "That answer is so wrong it circled back to being almost right. Almost.",
-  "The AI is laughing. Not at you. With you. Mostly at you.",
-  "You're building character with every wrong answer. Very characterful.",
-  "That was wrong in a way that's almost impressive. Almost.",
-  "If typing was Olympic sport, you'd be… wait, no. Not that one.",
+  "STOP GIVING UP BITCH.",
+  "Wrong. Embarrassingly wrong. We believe in you anyway.",
+  "Girl what was that.",
+  "The audacity to submit THAT.",
+  "Your ancestors are watching. They're concerned.",
+  "Babe no.",
+  "Not even close bestie 💀",
+  "My guy typed that with full confidence huh.",
+  "The AI shed a single tear.",
+  "That answer woke up and chose violence.",
+  "Delete. Delete. DELETE.",
+  "Sir/ma'am this is a language app.",
+  "I've seen better guesses from a golden retriever.",
+  "We don't talk about that answer. Ever.",
+  "The correct answer called. It's disappointed.",
+  "Wrong answer energy: immaculate. Actual answer: terrible.",
+  "You typed that and pressed enter. On purpose.",
+  "Bro said 'yolo' and submitted. Respect. Wrong. But respect.",
+  "The dictionary just blocked you.",
+  "That was so wrong it came back around and was still wrong.",
+  "Your confidence is inspiring. Your answer is not.",
+  "History will not remember this moment. Thankfully.",
+  "Somewhere, a language teacher felt a disturbance in the force.",
 ];
 
 function randomItem(arr: string[]): string {
@@ -148,92 +150,133 @@ function Masthead({
   sessionInfo,
   onChange,
   user,
+  onGoToDashboard,
 }: {
   sessionInfo?: { pair: string; done: number; total: number };
   onChange?: () => void;
   user?: { name?: string | null; email?: string | null; image?: string | null };
+  onGoToDashboard?: () => void;
 }) {
   return (
     <div className="flex items-center justify-between px-9 py-5 border-b border-rule">
       <div className="flex items-center gap-3.5">
         <Mark />
-        <span className="font-serif text-[22px] leading-none text-ink">Phrase Trainer</span>
+        <span className="font-serif text-[26px] leading-none text-ink">Phrase Trainer</span>
       </div>
-      <div className="flex items-center gap-6">
+      <div className="flex items-center gap-4">
         {sessionInfo && (
-          <>
-            <div className="text-right">
-              <div className="eyebrow">{sessionInfo.pair}</div>
-              <div className="text-[12.5px] text-ink-2 mt-[3px] tabular">
-                <span className="text-ink font-medium">{sessionInfo.done}</span>
-                <span className="text-ink-3"> / {sessionInfo.total} phrases</span>
-              </div>
+          <div className="text-right">
+            <div className="eyebrow">{sessionInfo.pair}</div>
+            <div className="text-[18px] text-ink-2 mt-[3px] tabular">
+              <span className="text-ink font-medium">{sessionInfo.done}</span>
+              <span className="text-ink-3"> / {sessionInfo.total} phrases</span>
             </div>
-            {onChange && (
-              <button
-                onClick={onChange}
-                className="inline-flex items-center border border-rule bg-transparent text-ink-2 text-[11.5px] font-medium px-3 py-[7px] rounded-full hover:text-ink hover:border-ink-3 transition-colors"
-              >
-                Back to Dashboard
-                <svg width="10" height="10" viewBox="0 0 10 10" fill="none" className="ml-1.5">
-                  <path d="M1.5 5H8.5 M5 8.5L8.5 5L5 1.5" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
-                </svg>
-              </button>
-            )}
-          </>
-        )}
-        {user && (
-          <div className="flex items-center gap-2.5">
-            <div className="flex items-center gap-2 bg-good-soft border border-good/30 rounded-full pl-1 pr-3 py-[3px]">
-              {user.image ? (
-                // eslint-disable-next-line @next/next/no-img-element
-                <img src={user.image} alt={user.name ?? "User"} className="w-6 h-6 rounded-full" />
-              ) : (
-                <div className="w-6 h-6 rounded-full bg-good/30 flex items-center justify-center text-[11px] font-medium text-good">
-                  {(user.name ?? user.email ?? "?").charAt(0).toUpperCase()}
-                </div>
-              )}
-              <div className="flex flex-col leading-tight">
-                <span className="text-[10px] uppercase tracking-wider text-good font-semibold">Signed in</span>
-                {user.name && (
-                  <span className="text-[12px] text-ink font-medium max-w-[140px] truncate" title={user.email ?? undefined}>
-                    {user.name}
-                  </span>
-                )}
-              </div>
-            </div>
-            <button
-              onClick={() => signOut()}
-              className="inline-flex items-center border border-rule bg-transparent text-ink-2 text-[11.5px] font-medium px-3 py-[7px] rounded-full hover:text-ink hover:border-ink-3 transition-colors"
-            >
-              Sign out
-            </button>
           </div>
         )}
+        <ThreeDotMenu user={user} onBack={onChange} onGoToDashboard={onGoToDashboard} />
       </div>
     </div>
   );
 }
 
+function ThreeDotMenu({
+  user,
+  onBack,
+  onGoToDashboard,
+}: {
+  user?: { name?: string | null; email?: string | null; image?: string | null };
+  onBack?: () => void;
+  onGoToDashboard?: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    function handleClick(e: MouseEvent) {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    }
+    document.addEventListener("mousedown", handleClick);
+    return () => document.removeEventListener("mousedown", handleClick);
+  }, []);
+
+  return (
+    <div className="relative" ref={ref}>
+      <button
+        onClick={() => setOpen((v) => !v)}
+        className="w-9 h-9 rounded-full flex items-center justify-center border border-rule bg-paper text-ink hover:border-ink-3 transition-colors"
+        title="Menu"
+      >
+        <svg width="16" height="4" viewBox="0 0 16 4" fill="none" aria-hidden="true">
+          <circle cx="2" cy="2" r="1.5" fill="currentColor"/>
+          <circle cx="8" cy="2" r="1.5" fill="currentColor"/>
+          <circle cx="14" cy="2" r="1.5" fill="currentColor"/>
+        </svg>
+      </button>
+
+      {open && (
+        <div className="absolute right-0 top-11 w-[220px] bg-paper border border-rule rounded-2xl shadow-[0_8px_32px_-8px_rgba(26,23,20,0.2)] overflow-hidden z-50">
+          {/* User info */}
+          {user && (
+            <div className="px-4 py-3 border-b border-rule flex items-center gap-3">
+              {user.image ? (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img src={user.image} alt={user.name ?? "User"} className="w-8 h-8 rounded-full shrink-0" />
+              ) : (
+                <div className="w-8 h-8 rounded-full bg-good/20 flex items-center justify-center text-[16px] font-medium text-good shrink-0">
+                  {(user.name ?? user.email ?? "?").charAt(0).toUpperCase()}
+                </div>
+              )}
+              <div className="min-w-0">
+                {user.name && <div className="text-[15px] font-medium text-ink truncate">{user.name}</div>}
+                {user.email && <div className="text-[13px] text-ink-3 truncate">{user.email}</div>}
+              </div>
+            </div>
+          )}
+
+          {/* Menu items */}
+          <div className="py-1.5">
+            {onGoToDashboard && (
+              <MenuItem icon="🏠" label="Dashboard" onClick={() => { onGoToDashboard(); setOpen(false); }} />
+            )}
+            {onBack && (
+              <MenuItem icon="←" label="Back to Dashboard" onClick={() => { onBack(); setOpen(false); }} />
+            )}
+            {user ? (
+              <MenuItem icon="🚪" label="Sign out" onClick={() => { signOut(); setOpen(false); }} danger />
+            ) : (
+              <MenuItem icon="🔑" label="Sign in" onClick={() => { signIn("google"); setOpen(false); }} />
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function MenuItem({ icon, label, onClick, danger }: { icon: string; label: string; onClick: () => void; danger?: boolean }) {
+  return (
+    <button
+      onClick={onClick}
+      className={`w-full flex items-center gap-3 px-4 py-2.5 text-[15px] text-left transition-colors hover:bg-cream ${danger ? "text-bad hover:text-bad" : "text-ink"}`}
+    >
+      <span className="w-5 text-center">{icon}</span>
+      {label}
+    </button>
+  );
+}
+
 function Footer({ left, right }: { left?: React.ReactNode; right?: React.ReactNode }) {
   return (
-    <div className="mt-auto flex items-center justify-between px-9 py-3.5 border-t border-rule text-[11px] text-ink-3">
+    <div className="mt-auto flex items-center justify-between px-9 py-3.5 border-t border-rule text-[18px] text-ink-3">
       <div className="flex gap-4 items-center">{left}</div>
       <div className="flex gap-4 items-center">{right}</div>
     </div>
   );
 }
 
-function Kbd({ children }: { children: React.ReactNode }) {
-  return (
-    <span className="font-mono inline-flex items-center justify-center min-w-[18px] h-[18px] px-1.5 border border-rule border-b-2 rounded bg-paper text-[10px] text-ink-2 leading-none">
-      {children}
-    </span>
-  );
-}
 
 const PRIMARY_BTN =
-  "inline-flex items-center justify-center gap-2.5 bg-ink text-paper border border-ink rounded-full px-7 py-3.5 text-sm font-medium cursor-pointer shadow-[0_1px_0_rgba(255,255,255,0.4)_inset,0_6px_16px_-8px_rgba(26,23,20,0.5)] hover:bg-ink-2 transition-colors disabled:opacity-40 disabled:cursor-not-allowed";
+  "inline-flex items-center justify-center gap-2.5 bg-ink text-paper border border-ink rounded-full px-7 py-3.5 text-base font-medium cursor-pointer shadow-[0_1px_0_rgba(255,255,255,0.4)_inset,0_6px_16px_-8px_rgba(26,23,20,0.5)] hover:bg-ink-2 transition-colors disabled:opacity-40 disabled:cursor-not-allowed";
 
 const INPUT_WRAP =
   "flex items-center gap-2.5 bg-paper border border-ink rounded-xl px-4 py-3.5 shadow-[0_0_0_4px_rgba(26,23,20,0.06)] focus-within:border-ink";
@@ -253,7 +296,8 @@ export default function Home() {
   const [sourceLang, setSourceLang] = useState<LanguageCode>("english");
   const [targetLang, setTargetLang] = useState<LanguageCode>("cebuano");
   const [level, setLevel] = useState<LevelCode>("A1");
-  const [stage, setStage] = useState<Stage>({ kind: "dashboard-loading" });
+  const emptyDashboard: DashboardData = { progress: [], blocksByLang: {}, uiLang: "english" };
+  const [stage, setStage] = useState<Stage>({ kind: "landing" });
   const [input, setInput] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [phrasesModal, setPhrasesModal] = useState<{
@@ -275,23 +319,75 @@ export default function Home() {
 
   useEffect(() => {
     if (status !== "authenticated") return;
-    if (stage.kind !== "dashboard-loading") return;
+    if (stage.kind !== "dashboard" || !stage.refreshing) return;
     let cancelled = false;
     (async () => {
       try {
         const res = await fetch("/api/dashboard");
         if (!res.ok) throw new Error(await res.text());
         const data = (await res.json()) as DashboardData;
-        if (!cancelled) setStage({ kind: "dashboard", data });
+        if (!cancelled) setStage({ kind: "dashboard", data, refreshing: false });
       } catch (e) {
         if (!cancelled) {
           setError(e instanceof Error ? e.message : "Failed to load dashboard");
-          setStage({ kind: "dashboard", data: { progress: [], blocksByLang: {}, uiLang: "english" } });
+          setStage({ kind: "dashboard", data: emptyDashboard, refreshing: false });
         }
       }
     })();
     return () => { cancelled = true; };
   }, [status, stage.kind]);
+
+  /* ─── LANDING ─── */
+
+  if (stage.kind === "landing") {
+    return (
+      <Page>
+        <div className="flex-1 flex flex-col lg:flex-row min-h-0">
+          {/* Left — hero */}
+          <div className="flex-1 flex flex-col justify-center px-12 lg:px-16 py-14 lg:border-r border-rule">
+            <div className="eyebrow text-terracotta mb-5">Phrase Trainer</div>
+            <h1 className="font-serif text-[56px] md:text-[72px] leading-[1.0] tracking-[-0.03em] mb-6">
+              Welcome.{" "}
+              <span className="italic text-terracotta">Start learning</span>{" "}
+              a new language.
+            </h1>
+            <p className="text-[18px] text-ink-2 leading-[1.7] max-w-[420px] mb-10">
+              20 phrases per block. AI-generated. Voice-powered. One wrong answer and you stay — until you get it right.
+            </p>
+            <div>
+              <button
+                onClick={() => setStage({ kind: "dashboard", data: emptyDashboard, refreshing: true })}
+                className={PRIMARY_BTN}
+              >
+                Get Started
+                <ArrowRight />
+              </button>
+            </div>
+          </div>
+
+          {/* Right — feature list */}
+          <div className="lg:w-[340px] flex flex-col justify-center px-10 py-12 gap-5">
+            {[
+              { icon: "🧱", title: "Blocks of 20", desc: "AI picks the perfect phrases for your level." },
+              { icon: "🎤", title: "Voice Practice", desc: "Speak your answer — the mic checks you." },
+              { icon: "🔊", title: "Hear It First", desc: "Listen to pronunciation before you type." },
+              { icon: "📈", title: "Track Progress", desc: "See how far you've come, block by block." },
+              { icon: "😂", title: "Actually Fun", desc: "Wrong answers come with brutally honest jokes." },
+            ].map((f) => (
+              <div key={f.title} className="flex items-start gap-4">
+                <div className="text-[26px] mt-0.5">{f.icon}</div>
+                <div>
+                  <div className="text-[16px] font-semibold text-ink">{f.title}</div>
+                  <div className="text-[15px] text-ink-3 leading-snug mt-0.5">{f.desc}</div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+        <Footer left={<span className="italic">Learn smarter, not harder.</span>} />
+      </Page>
+    );
+  }
 
   /* ─── AUTH GATE ─── */
 
@@ -312,10 +408,10 @@ export default function Home() {
         <div className="flex-1 grid place-items-center px-9 py-14">
           <div className="text-center max-w-[440px]">
             <div className="eyebrow text-terracotta mb-4">Sign in</div>
-            <h1 className="font-serif text-[44px] leading-[1.05] tracking-[-0.02em] mb-3">
+            <h1 className="font-serif text-[50px] leading-[1.05] tracking-[-0.02em] mb-3">
               Welcome to <span className="italic text-terracotta">Phrase Trainer</span>.
             </h1>
-            <p className="text-[14.5px] text-ink-2 leading-[1.6] mb-9">
+            <p className="text-[26px] text-ink-2 leading-[1.6] mb-9">
               Sign in with Google to save your progress across devices.
             </p>
             <button onClick={() => signIn("google")} className={PRIMARY_BTN}>
@@ -327,7 +423,7 @@ export default function Home() {
               </svg>
               Sign in with Google
             </button>
-            <p className="mt-5 text-[11.5px] text-ink-3">
+            <p className="mt-5 text-[18px] text-ink-3">
               Privacy: name + email + avatar only.
             </p>
           </div>
@@ -353,16 +449,27 @@ export default function Home() {
       if (data.activeBlock) {
         await loadSession();
       } else {
-        setStage({ kind: "block-create", submitting: false, error: null });
+        // Auto-create a block — no intermediate screen
+        setStage({ kind: "loading", message: "Building your first block…", blockGeneration: true });
+        const createRes = await fetch("/api/blocks", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ sourceLang, targetLang, level, description: null }),
+        });
+        if (!createRes.ok) {
+          const errData = (await createRes.json().catch(() => ({}))) as { error?: string };
+          throw new Error(errData.error ?? "Failed to create block");
+        }
+        await loadSession();
       }
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed");
-      setStage({ kind: "dashboard-loading" });
+      setStage({ kind: "dashboard", data: emptyDashboard, refreshing: true });
     }
   }
 
   async function loadSession() {
-    setStage({ kind: "loading" });
+    setStage({ kind: "loading", message: "Summoning the phrases…" });
     setInput("");
     try {
       const res = await fetch(
@@ -390,7 +497,7 @@ export default function Home() {
       });
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to load session");
-      setStage({ kind: "dashboard-loading" });
+      setStage({ kind: "dashboard", data: emptyDashboard, refreshing: true });
     }
   }
 
@@ -416,9 +523,9 @@ export default function Home() {
     }
   }
 
-  async function submitAnswer() {
+  async function processAnswer(val: string) {
     if (stage.kind !== "session" || stage.submitting) return;
-    const val = input.trim();
+    val = val.trim();
     if (!val) return;
 
     const currentPhrase = stage.phrases.find((p) => p.phrase_index > stage.currentN);
@@ -436,7 +543,6 @@ export default function Home() {
     if (normalize(val) === normalize(currentPhrase.target_text)) {
       await advancePhrase(currentPhrase);
     } else if (stage.mode === "test") {
-      // Test mode: mistake resets to beginning
       const firstPhrase = stage.phrases[0];
       setStage({
         ...stage,
@@ -446,7 +552,6 @@ export default function Home() {
       });
       setInput("");
     } else {
-      // Repeat mode: just show the correct answer, continue
       const prev = stage.wrongByPhrase[currentPhrase.phrase_index] ?? [];
       setStage({
         ...stage,
@@ -458,6 +563,10 @@ export default function Home() {
       });
       setInput("");
     }
+  }
+
+  async function submitAnswer() {
+    await processAnswer(input);
   }
 
   async function advancePhrase(phrase: PhraseItem) {
@@ -496,59 +605,42 @@ export default function Home() {
     }
   }
 
-  function reset() {
-    setStage({ kind: "dashboard-loading" });
-    setError(null);
-    setInput("");
-  }
-
-  /* ─── DASHBOARD LOADING ─── */
-
-  if (stage.kind === "dashboard-loading") {
-    return (
-      <Page>
-        <Masthead user={session?.user} />
-        <div className="flex-1 grid place-items-center px-9">
-          <p className="eyebrow">Loading your dashboard…</p>
-        </div>
-      </Page>
-    );
+  async function loadBlockSession(src: string, tgt: string, lvl: string, mode: "repeat" | "test") {
+    setSourceLang(src as LanguageCode);
+    setTargetLang(tgt as LanguageCode);
+    setLevel(lvl as LevelCode);
+    setStage({ kind: "loading" });
+    try {
+      const res = await fetch(`/api/session-phrases?source=${src}&target=${tgt}&level=${lvl}`);
+      if (!res.ok) throw new Error();
+      const data = await res.json();
+      if (!data.block) { setStage({ kind: "block-create", submitting: false, error: null }); return; }
+      setStage({
+        kind: "session", mode,
+        block: data.block, phrases: data.phrases,
+        currentN: data.currentN, submitting: false,
+        mistake: null, wrongByPhrase: {},
+      });
+    } catch { setStage({ kind: "dashboard", data: emptyDashboard, refreshing: true }); }
   }
 
   /* ─── DASHBOARD ─── */
 
   if (stage.kind === "dashboard") {
     const { progress, blocksByLang } = stage.data;
+    const isRefreshing = stage.refreshing ?? false;
     return (
       <>
       <Page>
         <Masthead user={session?.user} />
         <div className="flex-1 overflow-y-auto">
-          <div className="px-10 lg:px-14 pt-12 pb-8 border-b border-rule">
-            <div className="eyebrow text-terracotta mb-3">Dashboard</div>
-            <h1 className="font-serif text-[42px] md:text-[48px] leading-[1.05] tracking-[-0.02em]">
-              {session?.user?.name ? (
-                <>
-                  Welcome back,{" "}
-                  <span className="italic text-terracotta">
-                    {session.user.name.split(" ")[0]}
-                  </span>
-                  .
-                </>
-              ) : (
-                "Welcome back."
-              )}
-            </h1>
-            <p className="text-[13px] text-ink-3 mt-4 italic max-w-[500px] leading-relaxed">
-              💬 {funnyQuote}
-            </p>
-          </div>
-
           {/* In-progress languages */}
           <div className="px-10 lg:px-14 py-9 border-b border-rule">
             <div className="eyebrow text-good mb-5">● In progress</div>
-            {progress.length === 0 ? (
-              <p className="text-[13px] text-ink-3 italic">
+            {isRefreshing ? (
+              <p className="text-[18px] text-ink-3 italic animate-pulse">Loading…</p>
+            ) : progress.length === 0 ? (
+              <p className="text-[18px] text-ink-3 italic">
                 Nothing started yet — start a new language below.
               </p>
             ) : (
@@ -566,14 +658,14 @@ export default function Home() {
                     >
                       {/* Language name only — e.g. "Russian" */}
                       <div className="flex items-baseline justify-between mb-3">
-                        <div className="font-serif text-[22px] leading-none text-ink">
+                        <div className="font-serif text-[26px] leading-none text-ink">
                           {tgtLabel}
                         </div>
                         <div className="flex items-center gap-3">
-                          <span className="text-[12px] text-ink-3">
+                          <span className="text-[18px] text-ink-3">
                             {p.learned_word_count} words
                           </span>
-                          <span className="font-mono text-[11px] text-ink-3 uppercase">
+                          <span className="font-mono text-[18px] text-ink-3 uppercase">
                             {p.level}
                           </span>
                           <button
@@ -588,11 +680,11 @@ export default function Home() {
                                     `/api/delete-language?source=${p.source_lang}&target=${p.target_lang}&level=${p.level}`,
                                     { method: "DELETE" },
                                   );
-                                  setStage({ kind: "dashboard-loading" });
+                                  setStage({ kind: "dashboard", data: emptyDashboard, refreshing: true });
                                 } catch {}
                               })();
                             }}
-                            className="text-[10px] text-ink-3 hover:text-bad transition-colors font-mono"
+                            className="text-[18px] text-ink-3 hover:text-bad transition-colors font-mono"
                             title={`Delete ${tgtLabel} (${p.level})`}
                           >
                             ✕
@@ -603,7 +695,7 @@ export default function Home() {
                       {/* Block list */}
                       <div className="space-y-2">
                         {blocks.length === 0 ? (
-                          <p className="text-[12px] text-ink-3 italic">
+                          <p className="text-[18px] text-ink-3 italic">
                             No blocks yet — start a new one below.
                           </p>
                         ) : (
@@ -614,58 +706,24 @@ export default function Home() {
                             >
                               <div className="flex items-center gap-2.5 min-w-0">
                                 <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${b.completed ? "bg-good" : "bg-terracotta"}`} />
-                                <span className="font-serif text-[15px] text-ink truncate">
+                                <span className="font-serif text-[18px] text-ink truncate">
                                   &ldquo;{b.description}&rdquo;
                                 </span>
-                                <span className="font-mono text-[10px] text-ink-3 shrink-0">
+                                <span className="font-mono text-[18px] text-ink-3 shrink-0">
                                   {b.phrase_count} phrases
                                 </span>
                               </div>
                               <div className="flex items-center gap-1.5 shrink-0">
                                 <button
-                                  onClick={async () => {
-                                    setSourceLang(p.source_lang as LanguageCode);
-                                    setTargetLang(p.target_lang as LanguageCode);
-                                    setLevel(p.level as LevelCode);
-                                    setStage({ kind: "loading" });
-                                    try {
-                                      const res = await fetch(`/api/session-phrases?source=${p.source_lang}&target=${p.target_lang}&level=${p.level}`);
-                                      if (!res.ok) throw new Error();
-                                      const data = await res.json();
-                                      if (!data.block) { setStage({ kind: "block-create", submitting: false, error: null }); return; }
-                                      setStage({
-                                        kind: "session", mode: "repeat",
-                                        block: data.block, phrases: data.phrases,
-                                        currentN: data.currentN, submitting: false,
-                                        mistake: null, wrongByPhrase: {},
-                                      });
-                                    } catch { setStage({ kind: "dashboard-loading" }); }
-                                  }}
-                                  className="text-[10px] bg-ink text-paper rounded-full px-2.5 py-1 font-medium hover:bg-ink-2 transition-colors"
+                                  onClick={() => { void loadBlockSession(p.source_lang, p.target_lang, p.level, "repeat"); }}
+                                  className="text-[18px] bg-ink text-paper rounded-full px-2.5 py-1 font-medium hover:bg-ink-2 transition-colors"
                                   title="Repeat mode — mistakes are forgiving"
                                 >
                                   🔁 Repeat
                                 </button>
                                 <button
-                                  onClick={async () => {
-                                    setSourceLang(p.source_lang as LanguageCode);
-                                    setTargetLang(p.target_lang as LanguageCode);
-                                    setLevel(p.level as LevelCode);
-                                    setStage({ kind: "loading" });
-                                    try {
-                                      const res = await fetch(`/api/session-phrases?source=${p.source_lang}&target=${p.target_lang}&level=${p.level}`);
-                                      if (!res.ok) throw new Error();
-                                      const data = await res.json();
-                                      if (!data.block) { setStage({ kind: "block-create", submitting: false, error: null }); return; }
-                                      setStage({
-                                        kind: "session", mode: "test",
-                                        block: data.block, phrases: data.phrases,
-                                        currentN: data.currentN, submitting: false,
-                                        mistake: null, wrongByPhrase: {},
-                                      });
-                                    } catch { setStage({ kind: "dashboard-loading" }); }
-                                  }}
-                                  className="text-[10px] border border-ink text-ink rounded-full px-2.5 py-1 font-medium hover:bg-ink hover:text-paper transition-colors"
+                                  onClick={() => { void loadBlockSession(p.source_lang, p.target_lang, p.level, "test"); }}
+                                  className="text-[18px] border border-ink text-ink rounded-full px-2.5 py-1 font-medium hover:bg-ink hover:text-paper transition-colors"
                                   title="Test mode — one mistake resets everything"
                                 >
                                   📝 Test
@@ -681,7 +739,7 @@ export default function Home() {
                                       setPhrasesModal({ source: src, target: tgt, level: lvl, blockDescription: b.description, phrases: data.phrases ?? [], loading: false });
                                     } catch { setPhrasesModal(null); }
                                   }}
-                                  className="text-[10px] border border-rule text-ink-2 rounded-full px-2.5 py-1 font-medium hover:text-ink hover:border-ink-3 transition-colors"
+                                  className="text-[18px] border border-rule text-ink-2 rounded-full px-2.5 py-1 font-medium hover:text-ink hover:border-ink-3 transition-colors"
                                 >
                                   👁 View list
                                 </button>
@@ -699,7 +757,7 @@ export default function Home() {
                           setLevel(p.level as LevelCode);
                           setStage({ kind: "block-create", submitting: false, error: null });
                         }}
-                        className="mt-2 text-[11px] text-ink-2 hover:text-ink underline underline-offset-2"
+                        className="mt-2 text-[18px] text-ink-2 hover:text-ink underline underline-offset-2"
                       >
                         + New block
                       </button>
@@ -736,7 +794,7 @@ export default function Home() {
                 <LevelStrip active={level} onPick={setLevel} />
               </FieldRow>
             </div>
-            {error && <p className="text-bad text-sm mt-3">{error}</p>}
+            {error && <p className="text-bad text-base mt-3">{error}</p>}
             <button
               onClick={() => { void startSession(); }}
               className={`${PRIMARY_BTN} mt-5`}
@@ -744,30 +802,18 @@ export default function Home() {
               Begin session
               <ArrowRight />
             </button>
+          </div>
 
-          {/* Link Telegram */}
+          {/* Link Telegram — compact */}
           <div className="px-10 lg:px-14 pb-9">
-            <div className="border-t border-rule pt-9 mt-2">
-              <div className="eyebrow text-ink-3 mb-1">🔗 Connect</div>
-              <h2 className="font-serif text-2xl mb-3">Link to Telegram</h2>
-              <p className="text-[13px] text-ink-2 mb-4 max-w-[500px] leading-relaxed">
-                Practice on the go! Link your account to Telegram and practice phrases directly in the chat.
-              </p>
+            <div className="border-t border-rule pt-4 flex items-center gap-4 flex-wrap">
+              <span className="text-[15px] text-ink-3">📱 Practice on Telegram?</span>
               <TelegramLinkButton />
             </div>
-          </div>
           </div>
         </div>
         <Footer
           left={<span className="italic max-w-[300px] truncate">💬 {dashboardFooterQuote}</span>}
-          right={
-            <button
-              onClick={() => signOut()}
-              className="text-[11px] text-ink-2 hover:text-ink underline underline-offset-2"
-            >
-              Sign out
-            </button>
-          }
         />
       </Page>
 
@@ -778,7 +824,7 @@ export default function Home() {
             <div className="flex items-baseline justify-between px-6 pt-5 pb-3 border-b border-rule">
               <div>
                 <div className="eyebrow mb-1">Block phrases</div>
-                <div className="font-serif text-[20px] text-ink">
+                <div className="font-serif text-[26px] text-ink">
                   {LANGUAGES.find((l) => l.code === phrasesModal.source)?.label ?? phrasesModal.source}
                   {" "}→{" "}
                   <span className="italic text-terracotta">
@@ -787,12 +833,12 @@ export default function Home() {
                   {" · "}{phrasesModal.level}
                 </div>
                 {phrasesModal.blockDescription && (
-                  <div className="text-[12px] text-ink-3 mt-1 italic">
+                  <div className="text-[18px] text-ink-3 mt-1 italic">
                     &ldquo;{phrasesModal.blockDescription}&rdquo;
                   </div>
                 )}
               </div>
-              <span className="font-mono text-[13px] text-ink-3">
+              <span className="font-mono text-[18px] text-ink-3">
                 {phrasesModal.loading ? "..." : phrasesModal.phrases.length}
               </span>
             </div>
@@ -802,7 +848,7 @@ export default function Home() {
                   <p className="eyebrow">Loading phrases…</p>
                 </div>
               ) : phrasesModal.phrases.length === 0 ? (
-                <p className="text-[13px] text-ink-3 italic">No phrases in this block yet.</p>
+                <p className="text-[18px] text-ink-3 italic">No phrases in this block yet.</p>
               ) : (
                 <div className="space-y-2">
                   {phrasesModal.phrases.map((ph) => (
@@ -810,8 +856,8 @@ export default function Home() {
                       key={ph.phrase_index}
                       className="px-4 py-3 bg-cream border border-rule rounded-xl flex items-baseline justify-between gap-4"
                     >
-                      <div className="text-[13px] text-ink-3 shrink-0">{ph.source_text}</div>
-                      <div className="font-serif text-[17px] text-ink text-right">{ph.target_text}</div>
+                      <div className="text-[18px] text-ink-3 shrink-0">{ph.source_text}</div>
+                      <div className="font-serif text-[26px] text-ink text-right">{ph.target_text}</div>
                     </div>
                   ))}
                 </div>
@@ -820,7 +866,7 @@ export default function Home() {
             <div className="px-6 py-3 border-t border-rule text-right">
               <button
                 onClick={() => setPhrasesModal(null)}
-                className="text-[12px] text-ink-2 hover:text-ink underline underline-offset-2"
+                className="text-[18px] text-ink-2 hover:text-ink underline underline-offset-2"
               >
                 Close
               </button>
@@ -843,7 +889,7 @@ export default function Home() {
         submitting={stage.submitting}
         error={stage.error}
         onSubmit={submitBlockCreate}
-        onBack={() => setStage({ kind: "dashboard-loading" })}
+        onBack={() => setStage({ kind: "dashboard", data: emptyDashboard, refreshing: true })}
         user={session?.user}
       />
     );
@@ -852,27 +898,34 @@ export default function Home() {
   /* ─── LOADING ─── */
 
   if (stage.kind === "loading") {
+    const loadingMessage = stage.message ?? "Summoning the phrases…";
     return (
       <Page>
-        <Masthead user={session?.user} />
+        <Masthead user={session?.user} onGoToDashboard={() => setStage({ kind: "dashboard", data: emptyDashboard, refreshing: true })} />
         <div className="flex-1 grid place-items-center px-9">
-          <div className="text-center">
+          <div className="text-center max-w-[420px]">
             <div className="eyebrow text-terracotta">Loading</div>
-            <p className="font-serif text-[36px] mt-3 leading-tight">
-              Summoning the phrases…
+            <p className="font-serif text-[40px] mt-3 leading-tight">
+              {loadingMessage}
             </p>
-            <p className="text-[13px] text-ink-3 mt-3 italic">
-              💬 {loadingQuote}
-            </p>
-            <div className="mt-6 flex justify-center gap-1.5">
-              {[0, 1, 2].map((i) => (
-                <span
-                  key={i}
-                  className="w-1.5 h-1.5 rounded-full bg-ink-3"
-                  style={{ animation: `blink 1.4s infinite ${i * 0.2}s` }}
-                />
-              ))}
-            </div>
+            {stage.blockGeneration ? (
+              <BlockGenerationSteps />
+            ) : (
+              <>
+                <p className="text-[18px] text-ink-3 mt-3 italic">
+                  💬 {loadingQuote}
+                </p>
+                <div className="mt-6 flex justify-center gap-1.5">
+                  {[0, 1, 2].map((i) => (
+                    <span
+                      key={i}
+                      className="w-1.5 h-1.5 rounded-full bg-ink-3"
+                      style={{ animation: `blink 1.4s infinite ${i * 0.2}s` }}
+                    />
+                  ))}
+                </div>
+              </>
+            )}
           </div>
         </div>
       </Page>
@@ -896,7 +949,7 @@ export default function Home() {
             done: doneCount,
             total: totalCount,
           }}
-          onChange={() => setStage({ kind: "dashboard-loading" })}
+          onChange={() => setStage({ kind: "dashboard", data: emptyDashboard, refreshing: true })}
           user={session?.user}
         />
 
@@ -919,14 +972,17 @@ export default function Home() {
                     <div className="flex items-center gap-2 mb-2">
                       <span className="eyebrow text-bad">● {randomItem(MISTAKE_JOKES)}</span>
                     </div>
-                    <div className="text-[13px] text-ink-3 mb-1">
+                    <div className="text-[18px] text-ink-3 mb-1">
                       {currentPhrase.source_text}
                     </div>
-                    <div className="font-serif text-[38px] leading-[1.12] tracking-[-0.015em] text-ink mb-4">
-                      {stage.mistake.correct}
+                    <div className="flex items-center gap-3 mb-1">
+                      <div className="font-serif text-[50px] leading-[1.12] tracking-[-0.015em] text-ink">
+                        {stage.mistake.correct}
+                      </div>
+                      <SpeakerButton text={stage.mistake.correct} langCode={targetLang} />
                     </div>
                     {(stage.wrongByPhrase[currentPhrase.phrase_index] ?? []).map((w, i) => (
-                      <div key={i} className="font-mono text-[13px] text-bad line-through">
+                      <div key={i} className="font-mono text-[18px] text-bad line-through">
                         {w || "(empty)"}
                       </div>
                     ))}
@@ -934,12 +990,17 @@ export default function Home() {
                 ) : (
                   <div className="mt-2">
                     <div className="eyebrow mb-2">{sourceLabel}</div>
-                    <div className="font-serif text-[42px] md:text-[46px] leading-[1.12] tracking-[-0.015em] text-ink mb-3">
+                    <div className="font-serif text-[54px] md:text-[58px] leading-[1.12] tracking-[-0.015em] text-ink mb-3">
                       {currentPhrase.source_text}
+                    </div>
+                    <div className="flex items-center gap-3 mb-3">
+                      <SpeakerButton text={currentPhrase.target_text} langCode={targetLang} />
+                      <span className="text-[18px] text-ink-3">Hear {targetLabel} pronunciation</span>
                     </div>
                     {/* Reveal button for beginners who need a hint */}
                     <ShowAnswerButton
                       targetText={currentPhrase.target_text}
+                      targetLangCode={targetLang}
                     />
                   </div>
                 )}
@@ -966,11 +1027,18 @@ export default function Home() {
                           ? "Type the answer above…"
                           : `Type in ${targetLabel}…`
                       }
-                      className="font-serif text-[22px] text-ink flex-1 bg-transparent outline-none placeholder:text-ink-3 placeholder:italic leading-tight"
+                      className="font-serif text-[26px] text-ink flex-1 bg-transparent outline-none placeholder:text-ink-3 placeholder:italic leading-tight"
                       disabled={stage.submitting}
                       autoFocus
                     />
-                    <span className="font-mono text-[11px] text-ink-3">↵</span>
+                    <MicButton
+                      langCode={targetLang}
+                      onResult={(text) => {
+                        setInput(text);
+                        void processAnswer(text);
+                      }}
+                    />
+                    <span className="font-mono text-[18px] text-ink-3 ml-1">↵</span>
                   </label>
                   <button
                     type="submit"
@@ -992,7 +1060,7 @@ export default function Home() {
           <div className="px-7 py-8 flex flex-col min-h-0 overflow-hidden">
             <div className="mb-4 flex-shrink-0">
               <div className="eyebrow text-terracotta mb-1">Block</div>
-              <div className="font-serif text-[17px] leading-tight text-ink">
+              <div className="font-serif text-[26px] leading-tight text-ink">
                 &ldquo;{stage.block.description}&rdquo;
               </div>
             </div>
@@ -1009,21 +1077,21 @@ export default function Home() {
                       key={phrase.phrase_index}
                       className="px-3 py-2.5 rounded-xl border border-good/30 bg-good-soft"
                     >
-                      <div className="text-[11px] text-ink-3 mb-0.5">{phrase.source_text}</div>
-                      <div className="font-serif text-[15px] text-ink leading-tight">
+                      <div className="text-[18px] text-ink-3 mb-0.5">{phrase.source_text}</div>
+                      <div className="font-serif text-[18px] text-ink leading-tight">
                         {phrase.target_text}
                       </div>
                       {phrase.new_words.length > 0 && (
                         <div className="flex flex-wrap gap-1 mt-1">
                           {phrase.new_words.map((w) => (
-                            <span key={w} className="text-[10px] text-good bg-good/10 px-1.5 py-[1px] rounded-full font-medium">
+                            <span key={w} className="text-[18px] text-good bg-good/10 px-1.5 py-[1px] rounded-full font-medium">
                               {w}
                             </span>
                           ))}
                         </div>
                       )}
                       {wrongs.map((w, i) => (
-                        <div key={i} className="font-mono text-[10px] text-bad line-through mt-0.5">
+                        <div key={i} className="font-mono text-[18px] text-bad line-through mt-0.5">
                           {w}
                         </div>
                       ))}
@@ -1037,8 +1105,8 @@ export default function Home() {
                       key={phrase.phrase_index}
                       className="px-3 py-2.5 rounded-xl border border-terracotta bg-terracotta-soft"
                     >
-                      <div className="eyebrow text-terracotta text-[10px] mb-0.5">● Now</div>
-                      <div className="text-[13px] text-ink leading-tight">
+                      <div className="eyebrow text-terracotta text-[18px] mb-0.5">● Now</div>
+                      <div className="text-[18px] text-ink leading-tight">
                         {phrase.source_text}
                       </div>
                     </div>
@@ -1050,7 +1118,7 @@ export default function Home() {
                     key={phrase.phrase_index}
                     className="px-3 py-2 rounded-xl border border-rule opacity-30"
                   >
-                    <div className="eyebrow text-[10px]">#{phrase.phrase_index}</div>
+                    <div className="eyebrow text-[18px]">#{phrase.phrase_index}</div>
                   </div>
                 );
               })}
@@ -1058,23 +1126,25 @@ export default function Home() {
           </div>
         </div>
 
-        <Footer
-          left={
-            stage.mistake ? (
-              <span className="text-bad">● Type the correct answer to continue</span>
-            ) : (
-              <>
-                <Kbd>↵</Kbd>
-                <span>Submit</span>
-              </>
-            )
-          }
-          right={
-            <span>
-              {doneCount} / {totalCount} done
+        {/* Session progress bar footer */}
+        <div className="px-9 py-4 border-t border-rule flex items-center gap-4">
+          {stage.mistake ? (
+            <span className="text-[15px] text-bad font-medium shrink-0">● Type the correct answer to continue</span>
+          ) : (
+            <span className="text-[15px] text-ink-2 shrink-0">
+              {doneCount} <span className="text-ink-3">/ {totalCount}</span>
             </span>
-          }
-        />
+          )}
+          <div className="flex-1 h-2 bg-rule rounded-full overflow-hidden">
+            <div
+              className="h-full bg-good rounded-full transition-all duration-500"
+              style={{ width: `${totalCount > 0 ? (doneCount / totalCount) * 100 : 0}%` }}
+            />
+          </div>
+          <span className="text-[15px] text-ink-3 shrink-0 tabular">
+            {totalCount > 0 ? Math.round((doneCount / totalCount) * 100) : 0}%
+          </span>
+        </div>
       </Page>
     );
   }
@@ -1088,15 +1158,15 @@ export default function Home() {
         <div className="flex-1 overflow-y-auto">
           <div className="px-10 lg:px-14 pt-12 pb-8 border-b border-rule">
             <div className="eyebrow text-good mb-3">✦ Block complete</div>
-            <h1 className="font-serif text-[44px] md:text-[52px] leading-[1.05] tracking-[-0.02em] mb-2">
+            <h1 className="font-serif text-[50px] md:text-[58px] leading-[1.05] tracking-[-0.02em] mb-2">
               &ldquo;
               <span className="italic text-terracotta">{stage.block.description}</span>
               &rdquo; done.
             </h1>
-            <p className="text-[14px] text-ink-2">
+            <p className="text-[18px] text-ink-2">
               {stage.phrases.length} phrases learned in this block.
             </p>
-            <p className="text-[13px] text-ink-3 mt-3 italic">
+            <p className="text-[18px] text-ink-3 mt-3 italic">
               💬 {funnyQuote}
             </p>
             <button
@@ -1111,10 +1181,10 @@ export default function Home() {
           <div className="px-10 lg:px-14 py-9">
             <div className="flex items-baseline justify-between mb-4">
               <div className="eyebrow">Words learned in this block</div>
-              <span className="font-mono text-[13px] text-ink-3">{stage.wordCount} words</span>
+              <span className="font-mono text-[18px] text-ink-3">{stage.wordCount} words</span>
             </div>
             {stage.words.length === 0 ? (
-              <p className="text-[13px] text-ink-3 italic">No new words in this block.</p>
+              <p className="text-[18px] text-ink-3 italic">No new words in this block.</p>
             ) : (
               <div className="flex flex-wrap gap-2">
                 {stage.words.map((w) => (
@@ -1122,7 +1192,7 @@ export default function Home() {
                     key={w}
                     className="inline-flex items-center gap-1.5 bg-paper border border-rule rounded-full pl-3 pr-1.5 py-1 group hover:border-bad/40 transition-colors"
                   >
-                    <span className="text-[13px] text-ink font-medium">{w}</span>
+                    <span className="text-[18px] text-ink font-medium">{w}</span>
                     <button
                       onClick={async () => {
                         try {
@@ -1135,7 +1205,7 @@ export default function Home() {
                           );
                         } catch {}
                       }}
-                      className="w-5 h-5 rounded-full flex items-center justify-center text-[11px] text-ink-3 hover:text-bad hover:bg-bad/10 opacity-0 group-hover:opacity-100 transition-all"
+                      className="w-5 h-5 rounded-full flex items-center justify-center text-[18px] text-ink-3 hover:text-bad hover:bg-bad/10 opacity-0 group-hover:opacity-100 transition-all"
                       title="Remove word"
                     >
                       ✕
@@ -1150,8 +1220,8 @@ export default function Home() {
           left={<span>Block saved to your history.</span>}
           right={
             <button
-              onClick={() => setStage({ kind: "dashboard-loading" })}
-              className="text-[11px] text-ink-2 hover:text-ink underline underline-offset-2"
+              onClick={() => setStage({ kind: "dashboard", data: emptyDashboard, refreshing: true })}
+              className="text-[18px] text-ink-2 hover:text-ink underline underline-offset-2"
             >
               Back to dashboard
             </button>
@@ -1164,7 +1234,182 @@ export default function Home() {
   return null;
 }
 
+/* ─── Speech ─── */
+
+const LANG_BCP47: Record<string, string> = {
+  english:    "en-US",
+  cebuano:    "fil-PH",
+  tagalog:    "fil-PH",
+  portuguese: "pt-PT",
+  russian:    "ru-RU",
+};
+
+function SpeakerButton({ text, langCode, size = "md" }: { text: string; langCode: string; size?: "sm" | "md" }) {
+  const [playing, setPlaying] = useState(false);
+
+  function speak() {
+    if (!window.speechSynthesis) return;
+    window.speechSynthesis.cancel();
+    const utt = new SpeechSynthesisUtterance(text);
+    utt.lang = LANG_BCP47[langCode] ?? "en-US";
+    utt.onend = () => setPlaying(false);
+    utt.onerror = () => setPlaying(false);
+    setPlaying(true);
+    window.speechSynthesis.speak(utt);
+  }
+
+  const sz = size === "sm"
+    ? "w-6 h-6 text-[18px]"
+    : "w-8 h-8 text-[18px]";
+
+  return (
+    <button
+      type="button"
+      onClick={speak}
+      title="Listen to pronunciation"
+      className={`${sz} rounded-full flex items-center justify-center border transition-colors ${
+        playing
+          ? "border-terracotta bg-terracotta/10 text-terracotta"
+          : "border-rule bg-paper text-ink-2 hover:border-ink-3 hover:text-ink"
+      }`}
+    >
+      {playing ? (
+        <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">
+          <rect x="2" y="2" width="4" height="10" rx="1" fill="currentColor"/>
+          <rect x="8" y="2" width="4" height="10" rx="1" fill="currentColor"/>
+        </svg>
+      ) : (
+        <svg width="15" height="14" viewBox="0 0 15 14" fill="none" aria-hidden="true">
+          <path d="M2 4.5H5L9 1.5V12.5L5 9.5H2V4.5Z" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round" fill="none"/>
+          <path d="M11 4C11.8 4.8 12.3 5.9 12.3 7C12.3 8.1 11.8 9.2 11 10" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/>
+          <path d="M12.5 2C13.9 3.3 14.8 5.1 14.8 7C14.8 8.9 13.9 10.7 12.5 12" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/>
+        </svg>
+      )}
+    </button>
+  );
+}
+
+// Extend Window type for SpeechRecognition
+declare global {
+  interface Window {
+    SpeechRecognition: new () => SpeechRecognitionInstance;
+    webkitSpeechRecognition: new () => SpeechRecognitionInstance;
+  }
+}
+
+interface SpeechRecognitionInstance extends EventTarget {
+  lang: string;
+  interimResults: boolean;
+  maxAlternatives: number;
+  start(): void;
+  stop(): void;
+  abort(): void;
+  onresult: ((e: SpeechRecognitionEvent) => void) | null;
+  onend: (() => void) | null;
+  onerror: (() => void) | null;
+}
+
+interface SpeechRecognitionEvent {
+  results: { [index: number]: { [index: number]: { transcript: string } } };
+}
+
+function MicButton({ langCode, onResult }: { langCode: string; onResult: (text: string) => void }) {
+  const [listening, setListening] = useState(false);
+  const recRef = useRef<SpeechRecognitionInstance | null>(null);
+
+  function toggle() {
+    if (listening) {
+      recRef.current?.stop();
+      setListening(false);
+      return;
+    }
+    const SR = window.SpeechRecognition ?? window.webkitSpeechRecognition;
+    if (!SR) {
+      alert("Sorry, your browser doesn't support voice input. Try Chrome.");
+      return;
+    }
+    const rec = new SR();
+    rec.lang = LANG_BCP47[langCode] ?? "en-US";
+    rec.interimResults = false;
+    rec.maxAlternatives = 1;
+    rec.onresult = (e) => {
+      const transcript = e.results[0][0].transcript;
+      onResult(transcript);
+      setListening(false);
+    };
+    rec.onend = () => setListening(false);
+    rec.onerror = () => setListening(false);
+    recRef.current = rec;
+    setListening(true);
+    rec.start();
+  }
+
+  return (
+    <button
+      type="button"
+      onClick={toggle}
+      title={listening ? "Stop recording" : "Speak your answer"}
+      className={`w-9 h-9 rounded-full flex items-center justify-center border transition-all shrink-0 ${
+        listening
+          ? "border-bad bg-bad/10 text-bad animate-pulse"
+          : "border-rule bg-paper text-ink-2 hover:border-ink-3 hover:text-ink"
+      }`}
+    >
+      <svg width="14" height="18" viewBox="0 0 14 18" fill="none" aria-hidden="true">
+        <rect x="4" y="1" width="6" height="10" rx="3" stroke="currentColor" strokeWidth="1.5" fill="none"/>
+        <path d="M1 9C1 12.3137 3.68629 15 7 15C10.3137 15 13 12.3137 13 9" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
+        <line x1="7" y1="15" x2="7" y2="17" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
+        <line x1="4.5" y1="17" x2="9.5" y2="17" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
+      </svg>
+    </button>
+  );
+}
+
 /* ─── Helper components ─── */
+
+const BLOCK_GEN_STEPS = [
+  { label: "Picking a theme for you…", delay: 0 },
+  { label: "Choosing vocabulary for your level…", delay: 4000 },
+  { label: "Writing 20 phrases…", delay: 9000 },
+  { label: "Checking the translations…", delay: 16000 },
+  { label: "Almost there…", delay: 22000 },
+];
+
+function BlockGenerationSteps() {
+  const [stepIndex, setStepIndex] = useState(0);
+
+  useEffect(() => {
+    const timers = BLOCK_GEN_STEPS.map((step, i) =>
+      setTimeout(() => setStepIndex(i), step.delay),
+    );
+    return () => timers.forEach(clearTimeout);
+  }, []);
+
+  return (
+    <div className="mt-6 space-y-2 text-left">
+      {BLOCK_GEN_STEPS.map((step, i) => {
+        const done = i < stepIndex;
+        const current = i === stepIndex;
+        return (
+          <div
+            key={i}
+            className={`flex items-center gap-3 px-4 py-2.5 rounded-xl transition-all duration-500 ${
+              current ? "bg-terracotta/10 border border-terracotta/20" :
+              done ? "opacity-40" : "opacity-20"
+            }`}
+          >
+            <span className="text-[18px] w-5 text-center">
+              {done ? "✓" : current ? "⋯" : "○"}
+            </span>
+            <span className={`text-[18px] ${current ? "text-ink font-medium" : "text-ink-2"}`}>
+              {step.label}
+            </span>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
 
 function Page({ children }: { children: React.ReactNode }) {
   return (
@@ -1212,7 +1457,7 @@ function SelectField({
       <select
         value={value}
         onChange={(e) => onChange(e.target.value)}
-        className={`appearance-none bg-transparent outline-none font-serif text-[22px] pr-7 flex-1 cursor-pointer ${
+        className={`appearance-none bg-transparent outline-none font-serif text-[26px] pr-7 flex-1 cursor-pointer ${
           accent ? "text-terracotta" : "text-ink"
         }`}
       >
@@ -1257,9 +1502,9 @@ function LevelStrip({ active, onPick }: { active: LevelCode; onPick: (l: LevelCo
                 : "border-rule bg-paper text-ink hover:border-ink-3"
             }`}
           >
-            <div className="font-mono text-[12px] font-medium">{l.code}</div>
+            <div className="font-mono text-[18px] font-medium">{l.code}</div>
             <div
-              className={`text-[9.5px] mt-0.5 tracking-wide ${
+              className={`text-[18px] mt-0.5 tracking-wide ${
                 isActive ? "text-paper/65" : "text-ink-3"
               }`}
             >
@@ -1290,17 +1535,22 @@ function BlockDots({ done, total }: { done: number; total: number }) {
 
 function ShowAnswerButton({
   targetText,
+  targetLangCode,
 }: {
   targetText: string;
+  targetLangCode?: string;
 }) {
   const [revealed, setRevealed] = useState(false);
 
   if (revealed) {
     return (
-      <div className="flex items-center gap-2 bg-amber-soft border border-amber/30 rounded-xl px-4 py-3">
-        <span className="font-serif text-[17px] text-ink leading-tight">
+      <div className="flex items-center gap-3 bg-amber-soft border border-amber/30 rounded-xl px-4 py-3">
+        <span className="font-serif text-[26px] text-ink leading-tight flex-1">
           {targetText}
         </span>
+        {targetLangCode && (
+          <SpeakerButton text={targetText} langCode={targetLangCode} size="sm" />
+        )}
       </div>
     );
   }
@@ -1309,7 +1559,7 @@ function ShowAnswerButton({
     <button
       type="button"
       onClick={() => setRevealed(true)}
-      className="text-[11px] text-ink-2 hover:text-ink underline underline-offset-2 transition-colors"
+      className="text-[18px] text-ink-2 hover:text-ink underline underline-offset-2 transition-colors"
     >
       👁 Show translation
     </button>
@@ -1354,26 +1604,26 @@ function TelegramLinkButton() {
         <div className="bg-amber-soft border border-amber/30 rounded-xl px-5 py-4 mb-3 max-w-[500px]">
           <div className="eyebrow text-amber mb-2">✨ Your linking code</div>
           <div className="flex items-center gap-3">
-            <span className="font-mono text-[28px] font-bold tracking-[0.15em] text-ink">
+            <span className="font-mono text-[32px] font-bold tracking-[0.15em] text-ink">
               {linkCode}
             </span>
             <button
               onClick={copyCode}
-              className="text-[11px] text-ink-2 hover:text-ink underline underline-offset-2 transition-colors"
+              className="text-[18px] text-ink-2 hover:text-ink underline underline-offset-2 transition-colors"
             >
               {copied ? "Copied!" : "Copy"}
             </button>
           </div>
-          <p className="text-[12px] text-ink-3 mt-2">
+          <p className="text-[18px] text-ink-3 mt-2">
             Open Telegram and send this command to the bot:
           </p>
-          <div className="bg-paper border border-rule rounded-lg px-3 py-2 mt-1 font-mono text-[13px] text-ink">
+          <div className="bg-paper border border-rule rounded-lg px-3 py-2 mt-1 font-mono text-[18px] text-ink">
             /link {linkCode}
           </div>
         </div>
         <button
           onClick={handleLink}
-          className="text-[11px] text-ink-2 hover:text-ink underline underline-offset-2 transition-colors"
+          className="text-[18px] text-ink-2 hover:text-ink underline underline-offset-2 transition-colors"
         >
           Generate new code
         </button>
@@ -1386,11 +1636,11 @@ function TelegramLinkButton() {
       <button
         onClick={handleLink}
         disabled={loading}
-        className="inline-flex items-center gap-2 border border-ink bg-transparent text-ink rounded-full px-5 py-2.5 text-[12px] font-medium hover:bg-ink hover:text-paper transition-colors disabled:opacity-40"
+        className="inline-flex items-center gap-2 border border-ink bg-transparent text-ink rounded-full px-5 py-2.5 text-[18px] font-medium hover:bg-ink hover:text-paper transition-colors disabled:opacity-40"
       >
         {loading ? "Generating…" : "🔗 Link Telegram"}
       </button>
-      {error && <p className="text-bad text-[12px] mt-2">{error}</p>}
+      {error && <p className="text-bad text-[18px] mt-2">{error}</p>}
     </div>
   );
 }
@@ -1422,17 +1672,17 @@ function BlockCreateView({
         <div className="max-w-[640px] mx-auto">
           <button
             onClick={onBack}
-            className="text-[11.5px] text-ink-2 hover:text-ink underline underline-offset-2 mb-6"
+            className="text-[18px] text-ink-2 hover:text-ink underline underline-offset-2 mb-6"
           >
             ← Back to dashboard
           </button>
 
           <div className="eyebrow text-terracotta mb-3">New block</div>
-          <h1 className="font-serif text-[44px] leading-[1.05] tracking-[-0.02em] mb-3">
+          <h1 className="font-serif text-[50px] leading-[1.05] tracking-[-0.02em] mb-3">
             What should the next{" "}
             <span className="italic text-terracotta">block</span> teach you?
           </h1>
-          <p className="text-[14.5px] text-ink-2 leading-[1.6] mb-8">
+          <p className="text-[26px] text-ink-2 leading-[1.6] mb-8">
             20 phrases in {targetLabel ?? "your target language"} ({level}), generated by AI
             based on your description.
           </p>
@@ -1445,15 +1695,15 @@ function BlockCreateView({
               placeholder='e.g. "Ordering food at a restaurant" — or leave empty for auto-pick'
               rows={4}
               disabled={submitting}
-              className="w-full bg-cream border border-rule rounded-xl px-4 py-3 text-[15px] text-ink placeholder:text-ink-3 placeholder:italic outline-none focus:border-ink resize-none"
+              className="w-full bg-cream border border-rule rounded-xl px-4 py-3 text-[18px] text-ink placeholder:text-ink-3 placeholder:italic outline-none focus:border-ink resize-none"
             />
-            <p className="text-[11.5px] text-ink-3 mt-2">
+            <p className="text-[18px] text-ink-3 mt-2">
               AI will generate 20 phrases on your theme.
             </p>
           </div>
 
           {error && (
-            <div className="bg-bad-soft border border-bad/30 text-bad rounded-xl px-4 py-3 mb-5 text-[13px]">
+            <div className="bg-bad-soft border border-bad/30 text-bad rounded-xl px-4 py-3 mb-5 text-[18px]">
               {error}
             </div>
           )}
@@ -1470,13 +1720,13 @@ function BlockCreateView({
             <button
               onClick={() => onSubmit(null)}
               disabled={submitting}
-              className="inline-flex items-center justify-center gap-2 border border-ink bg-transparent text-ink rounded-full px-6 py-3.5 text-sm font-medium hover:bg-ink hover:text-paper transition-colors disabled:opacity-40"
+              className="inline-flex items-center justify-center gap-2 border border-ink bg-transparent text-ink rounded-full px-6 py-3.5 text-base font-medium hover:bg-ink hover:text-paper transition-colors disabled:opacity-40"
             >
               ✨ Generate automatically
             </button>
           </div>
 
-          <p className="text-[11.5px] text-ink-3 mt-5 text-center">
+          <p className="text-[18px] text-ink-3 mt-5 text-center">
             Pair: {sourceLabel} → {targetLabel} · Level {level} · 20 phrases per block
           </p>
         </div>
