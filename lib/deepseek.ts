@@ -138,12 +138,14 @@ export async function generateBlock(params: {
   const level = levelInfo(params.level);
   const knownList = params.knownWords.slice(-300);
 
+  const requestCount = params.phraseCount + 8;
+
   const system = `You generate themed blocks of language-learning phrases.
 
-A block is a coherent set of ${params.phraseCount} phrases connected by a theme or topic.
+A block is a coherent set of ${requestCount} phrases connected by a theme or topic.
 
 Hard rules:
-- Generate exactly ${params.phraseCount} phrases in ${targetLabel}.
+- Generate exactly ${requestCount} phrases in ${targetLabel}.
 - Every phrase must contain between 2 and 5 words.
 - Vocabulary and grammar must match CEFR level ${level.code} (~${level.targetWords} total target words).
 - Use simple words appropriate for ${level.code}; never pull obscure or higher-level vocabulary.
@@ -165,7 +167,7 @@ Output ONLY a JSON object. Schema:
   const user = `Source: ${sourceLabel}
 Target: ${targetLabel}
 Level: ${level.code}
-Phrases per block: ${params.phraseCount}
+Phrases per block: ${requestCount}
 
 User description (theme guidance):
 ${params.userDescription?.trim() ? params.userDescription.trim() : "(empty — pick a fresh, useful theme yourself)"}
@@ -183,7 +185,7 @@ Return JSON only.`;
     ],
     response_format: { type: "json_object" },
     temperature: 0.9,
-    max_tokens: 1200,
+    max_tokens: 1600,
   });
 
   const raw = completion.choices[0]?.message?.content?.trim();
@@ -205,7 +207,8 @@ Return JSON only.`;
   }
 
   const phrases: BlockPhrase[] = [];
-  for (const p of block.phrases.slice(0, params.phraseCount)) {
+  for (const p of block.phrases) {
+    if (phrases.length >= params.phraseCount) break;
     if (
       typeof (p as BlockPhrase).source_text !== "string" ||
       typeof (p as BlockPhrase).target_text !== "string"
