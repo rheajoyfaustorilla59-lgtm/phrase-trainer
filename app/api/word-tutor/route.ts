@@ -3,10 +3,16 @@ import { NextRequest } from "next/server";
 import { auth } from "@/auth";
 import { languageLabel, levelInfo, type LanguageCode, type LevelCode } from "@/lib/languages";
 
-const client = new OpenAI({
-  apiKey: process.env.DEEPSEEK_API_KEY!,
-  baseURL: "https://api.deepseek.com",
-});
+let cachedClient: OpenAI | null = null;
+function getClient(): OpenAI {
+  if (!cachedClient) {
+    cachedClient = new OpenAI({
+      apiKey: process.env.DEEPSEEK_API_KEY,
+      baseURL: "https://api.deepseek.com",
+    });
+  }
+  return cachedClient;
+}
 
 export async function POST(req: NextRequest) {
   const session = await auth();
@@ -36,7 +42,7 @@ How to reply (follow EVERY time):
 - If the learner asks "how do I say X", give the main answer first, then 2–4 related/alternative phrasings, still in the bullet format.
 - Do NOT add extra commentary after the list. End right after the last bullet.`;
 
-  const stream = await client.chat.completions.create({
+  const stream = await getClient().chat.completions.create({
     model: "deepseek-chat",
     messages: [{ role: "system", content: system }, ...messages],
     stream: true,

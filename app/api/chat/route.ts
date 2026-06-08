@@ -2,10 +2,16 @@ import OpenAI from "openai";
 import { NextRequest } from "next/server";
 import { auth } from "@/auth";
 
-const client = new OpenAI({
-  apiKey: process.env.DEEPSEEK_API_KEY!,
-  baseURL: "https://api.deepseek.com",
-});
+let cachedClient: OpenAI | null = null;
+function getClient(): OpenAI {
+  if (!cachedClient) {
+    cachedClient = new OpenAI({
+      apiKey: process.env.DEEPSEEK_API_KEY,
+      baseURL: "https://api.deepseek.com",
+    });
+  }
+  return cachedClient;
+}
 
 export async function POST(req: NextRequest) {
   const session = await auth();
@@ -15,7 +21,7 @@ export async function POST(req: NextRequest) {
     messages: Array<{ role: "user" | "assistant"; content: string }>;
   };
 
-  const stream = await client.chat.completions.create({
+  const stream = await getClient().chat.completions.create({
     model: "deepseek-chat",
     messages: [
       {

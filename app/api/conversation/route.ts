@@ -3,10 +3,16 @@ import { NextRequest } from "next/server";
 import { auth } from "@/auth";
 import { languageLabel, levelInfo, type LanguageCode, type LevelCode } from "@/lib/languages";
 
-const client = new OpenAI({
-  apiKey: process.env.DEEPSEEK_API_KEY!,
-  baseURL: "https://api.deepseek.com",
-});
+let cachedClient: OpenAI | null = null;
+function getClient(): OpenAI {
+  if (!cachedClient) {
+    cachedClient = new OpenAI({
+      apiKey: process.env.DEEPSEEK_API_KEY,
+      baseURL: "https://api.deepseek.com",
+    });
+  }
+  return cachedClient;
+}
 
 export async function POST(req: NextRequest) {
   const session = await auth();
@@ -37,7 +43,7 @@ Format example:
 <your ${targetLabel} reply + question>
 ↳ <${sourceLabel} translation of your reply>`;
 
-  const stream = await client.chat.completions.create({
+  const stream = await getClient().chat.completions.create({
     model: "deepseek-chat",
     messages: [{ role: "system", content: system }, ...messages],
     stream: true,
