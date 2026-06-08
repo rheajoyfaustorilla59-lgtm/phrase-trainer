@@ -2,38 +2,39 @@ import type { Config } from "tailwindcss";
 
 const config: Config = {
   content: ["./app/**/*.{js,ts,jsx,tsx,mdx}"],
+  darkMode: "class",
   theme: {
     extend: {
       colors: {
         cream: {
-          DEFAULT: "#F4EFE6",
-          2: "#EDE7DB",
+          DEFAULT: "rgb(var(--cream) / <alpha-value>)",
+          2: "rgb(var(--cream-2) / <alpha-value>)",
         },
-        paper: "#FBF8F2",
+        paper: "rgb(var(--paper) / <alpha-value>)",
         ink: {
-          DEFAULT: "#1A1714",
-          2: "#4A443D",
-          3: "#8A8278",
+          DEFAULT: "rgb(var(--ink) / <alpha-value>)",
+          2: "rgb(var(--ink-2) / <alpha-value>)",
+          3: "rgb(var(--ink-3) / <alpha-value>)",
         },
         rule: {
-          DEFAULT: "#D9D2C3",
-          2: "#E6DFCE",
+          DEFAULT: "rgb(var(--rule) / <alpha-value>)",
+          2: "rgb(var(--rule-2) / <alpha-value>)",
         },
         terracotta: {
           DEFAULT: "oklch(0.58 0.13 38)",
-          soft: "oklch(0.92 0.04 38)",
+          soft: "rgb(var(--terracotta-soft) / <alpha-value>)",
         },
         good: {
           DEFAULT: "oklch(0.55 0.10 155)",
-          soft: "oklch(0.93 0.04 155)",
+          soft: "rgb(var(--good-soft) / <alpha-value>)",
         },
         bad: {
           DEFAULT: "oklch(0.55 0.16 25)",
-          soft: "oklch(0.93 0.05 25)",
+          soft: "rgb(var(--bad-soft) / <alpha-value>)",
         },
         amber: {
           DEFAULT: "oklch(0.70 0.14 75)",
-          soft: "oklch(0.94 0.05 75)",
+          soft: "rgb(var(--amber-soft) / <alpha-value>)",
         },
       },
       fontFamily: {

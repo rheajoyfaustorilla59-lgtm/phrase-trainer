@@ -2,11 +2,47 @@
 @tailwind components;
 @tailwind utilities;
 
+/* Neutral palette as RGB channels so Tailwind opacity modifiers keep working.
+   Light theme is the default; .dark flips the neutrals. */
+:root {
+  --paper: 251 248 242;
+  --cream: 244 239 230;
+  --cream-2: 237 231 219;
+  --ink: 26 23 20;
+  --ink-2: 74 68 61;
+  --ink-3: 138 130 120;
+  --rule: 217 210 195;
+  --rule-2: 230 223 206;
+  --body-bg: 232 225 210;
+  --body-dot: rgba(26, 23, 20, 0.035);
+  --terracotta-soft: 242 230 223;
+  --good-soft: 222 238 227;
+  --bad-soft: 244 227 222;
+  --amber-soft: 241 232 213;
+}
+
+.dark {
+  --paper: 33 30 24;
+  --cream: 26 23 20;
+  --cream-2: 21 18 14;
+  --ink: 241 235 222;
+  --ink-2: 196 188 173;
+  --ink-3: 145 137 121;
+  --rule: 56 51 43;
+  --rule-2: 44 40 32;
+  --body-bg: 18 16 12;
+  --body-dot: rgba(255, 255, 255, 0.028);
+  --terracotta-soft: 58 42 34;
+  --good-soft: 30 44 34;
+  --bad-soft: 51 33 30;
+  --amber-soft: 50 42 26;
+}
+
 html, body { height: 100%; }
 body {
-  background: #E8E1D2;
-  color: #1A1714;
-  background-image: radial-gradient(circle at 1px 1px, rgba(26,23,20,0.035) 1px, transparent 0);
+  background: rgb(var(--body-bg));
+  color: rgb(var(--ink));
+  background-image: radial-gradient(circle at 1px 1px, var(--body-dot) 1px, transparent 0);
   background-size: 22px 22px;
 }
 
@@ -15,7 +51,7 @@ body {
   font-size: 12.5px;
   letter-spacing: 0.16em;
   text-transform: uppercase;
-  color: #8A8278;
+  color: rgb(var(--ink-3));
   font-weight: 500;
 }
 

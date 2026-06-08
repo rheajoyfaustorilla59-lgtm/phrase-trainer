@@ -7,6 +7,90 @@ export async function ensureStreakColumns(): Promise<void> {
   const sql = await getSql();
   await sql`ALTER TABLE users ADD COLUMN IF NOT EXISTS streak_days INT DEFAULT 0`;
   await sql`ALTER TABLE users ADD COLUMN IF NOT EXISTS last_practice_date TEXT`;
+  await sql`ALTER TABLE users ADD COLUMN IF NOT EXISTS daily_goal INT DEFAULT 10`;
+  await sql`ALTER TABLE users ADD COLUMN IF NOT EXISTS phrases_today INT DEFAULT 0`;
+  await sql`ALTER TABLE users ADD COLUMN IF NOT EXISTS daily_reset_date TEXT`;
+}
+
+/* ─── Hearts / lives ─── */
+
+export const MAX_HEARTS = 5;
+export const HEART_REGEN_MS = 30 * 60 * 1000; // one heart every 30 minutes
+
+export type HeartsState = { hearts: number; max: number; nextHeartInMs: number };
+
+export async function ensureHeartsColumns(): Promise<void> {
+  const sql = await getSql();
+  await sql`ALTER TABLE users ADD COLUMN IF NOT EXISTS hearts INT DEFAULT 5`;
+  await sql`ALTER TABLE users ADD COLUMN IF NOT EXISTS hearts_updated_at BIGINT`;
+}
+
+// Reads hearts, applying time-based regeneration and persisting any gained hearts.
+export async function getHearts(userId: string): Promise<HeartsState> {
+  const sql = await getSql();
+  const now = Date.now();
+  const rows = (await sql`
+    SELECT hearts, hearts_updated_at FROM users WHERE id = ${userId}
+  `) as Array<{ hearts: number | null; hearts_updated_at: number | string | null }>;
+  const row = rows[0];
+
+  let hearts = row?.hearts ?? MAX_HEARTS;
+  let anchor = row?.hearts_updated_at != null ? Number(row.hearts_updated_at) : now;
+
+  if (hearts < MAX_HEARTS) {
+    const regen = Math.floor((now - anchor) / HEART_REGEN_MS);
+    if (regen > 0) {
+      hearts = Math.min(MAX_HEARTS, hearts + regen);
+      anchor = hearts >= MAX_HEARTS ? now : anchor + regen * HEART_REGEN_MS;
+      await sql`UPDATE users SET hearts = ${hearts}, hearts_updated_at = ${anchor} WHERE id = ${userId}`;
+    }
+  }
+
+  const nextHeartInMs = hearts >= MAX_HEARTS ? 0 : Math.max(0, HEART_REGEN_MS - (now - anchor));
+  return { hearts, max: MAX_HEARTS, nextHeartInMs };
+}
+
+// Deducts one heart. Starts the regen clock if the user was at full hearts.
+export async function loseHeart(userId: string): Promise<HeartsState> {
+  const sql = await getSql();
+  const current = await getHearts(userId); // applies regen + persists
+  if (current.hearts <= 0) return current;
+
+  const newHearts = current.hearts - 1;
+  if (current.hearts >= MAX_HEARTS) {
+    await sql`UPDATE users SET hearts = ${newHearts}, hearts_updated_at = ${Date.now()} WHERE id = ${userId}`;
+  } else {
+    await sql`UPDATE users SET hearts = ${newHearts} WHERE id = ${userId}`;
+  }
+  return getHearts(userId);
+}
+
+export async function getDailyProgress(userId: string): Promise<{ phrasesToday: number; dailyGoal: number }> {
+  const sql = await getSql();
+  const today = new Date().toISOString().slice(0, 10);
+  const rows = (await sql`
+    SELECT phrases_today, daily_goal, daily_reset_date FROM users WHERE id = ${userId}
+  `) as Array<{ phrases_today: number | null; daily_goal: number | null; daily_reset_date: string | null }>;
+  const row = rows[0];
+  if (!row) return { phrasesToday: 0, dailyGoal: 10 };
+  const phrasesToday = row.daily_reset_date === today ? (row.phrases_today ?? 0) : 0;
+  return { phrasesToday, dailyGoal: row.daily_goal ?? 10 };
+}
+
+export async function setDailyGoal(userId: string, goal: number): Promise<void> {
+  const sql = await getSql();
+  await sql`UPDATE users SET daily_goal = ${goal} WHERE id = ${userId}`;
+}
+
+export async function incrementPhrasesToday(userId: string): Promise<void> {
+  const sql = await getSql();
+  const today = new Date().toISOString().slice(0, 10);
+  await sql`
+    UPDATE users
+    SET phrases_today = CASE WHEN daily_reset_date = ${today} THEN phrases_today + 1 ELSE 1 END,
+        daily_reset_date = ${today}
+    WHERE id = ${userId}
+  `;
 }
 
 export async function updateStreak(userId: string): Promise<number> {

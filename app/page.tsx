@@ -52,11 +52,34 @@ type LeaderboardEntry = {
   streak: number;
 };
 
+type HeartsState = { hearts: number; max: number; nextHeartInMs: number };
+
+type StorySentence = { target: string; source: string };
+type StoryQuestion = { question: string; options: string[]; answerIndex: number };
+type Story = {
+  title: string;
+  titleSource: string;
+  sentences: StorySentence[];
+  questions: StoryQuestion[];
+};
+
+type QuizQuestion = {
+  type: "mc-translate" | "listening" | "fill-blank";
+  promptLabel: string; // instruction shown above
+  promptText: string; // source text, or the sentence with a blank
+  hint?: string; // e.g. source translation for fill-blank
+  audioText?: string; // target text to speak (listening)
+  options: string[];
+  answerIndex: number;
+};
+
 type DashboardData = {
   progress: ProgressRow[];
   blocksByLang: Record<string, BlockSummary[]>;
   uiLang: string;
   streak: number;
+  daily: { phrasesToday: number; dailyGoal: number };
+  hearts?: HeartsState;
 };
 
 type Stage =
@@ -77,7 +100,11 @@ type Stage =
       roundUnlocked?: number;
       hadMistakeInRound?: boolean;
     }
-  | { kind: "block-done"; block: SessionBlock; phrases: PhraseItem[]; words: string[]; wordCount: number };
+  | { kind: "block-done"; block: SessionBlock; phrases: PhraseItem[]; words: string[]; wordCount: number }
+  | { kind: "story"; source: string; target: string; level: string; story: Story }
+  | { kind: "quiz"; source: string; target: string; level: string; blockId: number; blockDescription: string; questions: QuizQuestion[] }
+  | { kind: "conversation"; source: string; target: string; level: string }
+  | { kind: "wordtutor"; source: string; target: string; level: string };
 
 /* ─── Funny quotes (English) ─── */
 
@@ -145,6 +172,98 @@ function normalize(text: string): string {
     .replace(/\s+/g, " ");
 }
 
+function shuffle<T>(arr: T[]): T[] {
+  const a = [...arr];
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [a[i], a[j]] = [a[j], a[i]];
+  }
+  return a;
+}
+
+function quizWords(text: string): string[] {
+  return text
+    .replace(/[.,!?;:"'()\[\]{}«»¿¡]/g, "")
+    .split(/\s+/)
+    .filter((w) => w.length > 0);
+}
+
+// Builds a mixed-type quiz from a block's phrases. Pure (uses Math.random for variety).
+function buildQuiz(phrases: PhraseItem[]): QuizQuestion[] {
+  const usable = phrases.filter((p) => p.source_text?.trim() && p.target_text?.trim());
+  if (usable.length < 2) return [];
+
+  // Pool of distractor words across the block (for fill-blank).
+  const wordPool = Array.from(
+    new Set(usable.flatMap((p) => quizWords(p.target_text)).filter((w) => w.length > 1)),
+  );
+
+  function distractorTexts(correct: string, pick: (p: PhraseItem) => string, count: number): string[] {
+    const pool = shuffle(usable.map(pick).filter((t) => t && t !== correct));
+    const seen = new Set<string>();
+    const out: string[] = [];
+    for (const t of pool) {
+      if (out.length >= count) break;
+      if (seen.has(t)) continue;
+      seen.add(t);
+      out.push(t);
+    }
+    return out;
+  }
+
+  const selected = shuffle(usable).slice(0, Math.min(10, usable.length));
+  const types: QuizQuestion["type"][] = ["mc-translate", "listening", "fill-blank"];
+
+  const questions: QuizQuestion[] = selected.map((p, i) => {
+    let type = types[i % types.length];
+    const words = quizWords(p.target_text);
+    if (type === "fill-blank" && words.length < 2) type = "mc-translate";
+
+    if (type === "mc-translate") {
+      const opts = shuffle([p.target_text, ...distractorTexts(p.target_text, (x) => x.target_text, 3)]);
+      return {
+        type,
+        promptLabel: "Choose the correct translation",
+        promptText: p.source_text,
+        options: opts,
+        answerIndex: opts.indexOf(p.target_text),
+      };
+    }
+
+    if (type === "listening") {
+      const opts = shuffle([p.source_text, ...distractorTexts(p.source_text, (x) => x.source_text, 3)]);
+      return {
+        type,
+        promptLabel: "Listen and choose the meaning",
+        promptText: "",
+        audioText: p.target_text,
+        options: opts,
+        answerIndex: opts.indexOf(p.source_text),
+      };
+    }
+
+    // fill-blank: blank out the longest word in the target phrase (token-based, so we
+    // don't accidentally replace a substring inside another word).
+    const blankWord = [...words].sort((a, b) => b.length - a.length)[0];
+    const tokens = p.target_text.split(/\s+/);
+    const pos = tokens.findIndex((t) => quizWords(t)[0]?.toLowerCase() === blankWord.toLowerCase());
+    if (pos >= 0) tokens[pos] = tokens[pos].replace(blankWord, "_____");
+    const blanked = tokens.join(" ");
+    const distractors = shuffle(wordPool.filter((w) => w.toLowerCase() !== blankWord.toLowerCase())).slice(0, 3);
+    const opts = shuffle([blankWord, ...distractors]);
+    return {
+      type,
+      promptLabel: "Fill in the missing word",
+      promptText: blanked,
+      hint: p.source_text,
+      options: opts,
+      answerIndex: opts.indexOf(blankWord),
+    };
+  });
+
+  return questions.filter((q) => q.options.length >= 2 && q.answerIndex >= 0);
+}
+
 /* ─── Shared chrome ─── */
 
 function Mark() {
@@ -157,24 +276,59 @@ function Mark() {
   );
 }
 
+function HeartsRow({ hearts }: { hearts: HeartsState }) {
+  const mins = Math.ceil(hearts.nextHeartInMs / 60000);
+  const title =
+    hearts.hearts >= hearts.max
+      ? "Full hearts"
+      : hearts.hearts === 0
+      ? `Out of hearts — next in ~${mins} min`
+      : `${hearts.hearts} of ${hearts.max} hearts — next in ~${mins} min`;
+  return (
+    <div className="flex items-center gap-0.5" title={title}>
+      {Array.from({ length: hearts.max }).map((_, i) => (
+        <span key={i} className={`text-[18px] leading-none ${i < hearts.hearts ? "" : "opacity-25 grayscale"}`}>
+          {i < hearts.hearts ? "❤️" : "🤍"}
+        </span>
+      ))}
+    </div>
+  );
+}
+
 function Masthead({
   sessionInfo,
   onChange,
   user,
   onGoToDashboard,
+  onOpenSettings,
+  hearts,
 }: {
   sessionInfo?: { pair: string; done: number; total: number };
   onChange?: () => void;
   user?: { name?: string | null; email?: string | null; image?: string | null };
   onGoToDashboard?: () => void;
+  onOpenSettings?: () => void;
+  hearts?: HeartsState;
 }) {
   return (
     <div className="flex items-center justify-between px-9 py-5 border-b border-rule">
       <div className="flex items-center gap-3.5">
+        {onChange && (
+          <button
+            onClick={onChange}
+            className="w-9 h-9 rounded-full flex items-center justify-center border border-rule bg-paper text-ink hover:border-ink-3 transition-colors shrink-0"
+            title="Back to Dashboard"
+          >
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+              <path d="M10 3L5 8L10 13" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"/>
+            </svg>
+          </button>
+        )}
         <Mark />
         <span className="font-serif text-[26px] leading-none text-ink">Phrase Trainer</span>
       </div>
       <div className="flex items-center gap-4">
+        {hearts && <HeartsRow hearts={hearts} />}
         {sessionInfo && (
           <div className="text-right">
             <div className="eyebrow">{sessionInfo.pair}</div>
@@ -183,6 +337,18 @@ function Masthead({
               <span className="text-ink-3"> / {sessionInfo.total} phrases</span>
             </div>
           </div>
+        )}
+        {onOpenSettings && (
+          <button
+            onClick={onOpenSettings}
+            className="w-9 h-9 rounded-full flex items-center justify-center border border-rule bg-paper text-ink hover:border-ink-3 transition-colors shrink-0"
+            title="Settings — start a new language"
+          >
+            <svg width="17" height="17" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+              <circle cx="12" cy="12" r="3" stroke="currentColor" strokeWidth="1.8" />
+              <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+          </button>
         )}
         <ThreeDotMenu user={user} onBack={onChange} onGoToDashboard={onGoToDashboard} />
       </div>
@@ -307,13 +473,27 @@ export default function Home() {
   const [sourceLang, setSourceLang] = useState<LanguageCode>("english");
   const [targetLang, setTargetLang] = useState<LanguageCode>("cebuano");
   const [level, setLevel] = useState<LevelCode>("A1");
-  const emptyDashboard: DashboardData = { progress: [], blocksByLang: {}, uiLang: "english", streak: 0 };
+  const emptyDashboard: DashboardData = { progress: [], blocksByLang: {}, uiLang: "english", streak: 0, daily: { phrasesToday: 0, dailyGoal: 10 } };
   const [stage, setStage] = useState<Stage>({ kind: "landing" });
   const [input, setInput] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [leaderboard, setLeaderboard] = useState<LeaderboardEntry[]>([]);
   const [leaderboardLoading, setLeaderboardLoading] = useState(false);
-  const beginSessionRef = useRef<HTMLDivElement>(null);
+  const [hearts, setHearts] = useState<HeartsState>({ hearts: 5, max: 5, nextHeartInMs: 0 });
+  const [theme, setTheme] = useState<"light" | "dark">("light");
+
+  useEffect(() => {
+    setTheme(document.documentElement.classList.contains("dark") ? "dark" : "light");
+  }, []);
+
+  function applyTheme(t: "light" | "dark") {
+    setTheme(t);
+    const root = document.documentElement;
+    if (t === "dark") root.classList.add("dark");
+    else root.classList.remove("dark");
+    try { localStorage.setItem("theme", t); } catch {}
+  }
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const [phrasesModal, setPhrasesModal] = useState<{
     source: string;
     target: string;
@@ -331,16 +511,21 @@ export default function Home() {
     if (stage.kind === "session") inputRef.current?.focus();
   }, [stage.kind]);
 
+
+  const dashboardNeedsRefresh = stage.kind === "dashboard" && !!stage.refreshing;
   useEffect(() => {
     if (status !== "authenticated") return;
-    if (stage.kind !== "dashboard" || !stage.refreshing) return;
+    if (!dashboardNeedsRefresh) return;
     let cancelled = false;
     (async () => {
       try {
         const res = await fetch("/api/dashboard");
         if (!res.ok) throw new Error(await res.text());
         const data = (await res.json()) as DashboardData;
-        if (!cancelled) setStage({ kind: "dashboard", data, refreshing: false });
+        if (!cancelled) {
+          if (data.hearts) setHearts(data.hearts);
+          setStage({ kind: "dashboard", data, refreshing: false });
+        }
       } catch (e) {
         if (!cancelled) {
           setError(e instanceof Error ? e.message : "Failed to load dashboard");
@@ -349,7 +534,7 @@ export default function Home() {
       }
     })();
     return () => { cancelled = true; };
-  }, [status, stage.kind]);
+  }, [status, dashboardNeedsRefresh]);
 
   useEffect(() => {
     if (status !== "authenticated") return;
@@ -554,6 +739,21 @@ export default function Home() {
     }
   }
 
+  // Deduct a heart on the server and sync local state. Fire-and-forget for UI snappiness.
+  function loseHeart() {
+    setHearts((h) => ({ ...h, hearts: Math.max(0, h.hearts - 1) }));
+    (async () => {
+      try {
+        const res = await fetch("/api/hearts", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ action: "lose" }),
+        });
+        if (res.ok) setHearts((await res.json()) as HeartsState);
+      } catch {}
+    })();
+  }
+
   async function processAnswer(val: string) {
     if (stage.kind !== "session" || stage.submitting) return;
     val = val.trim();
@@ -562,19 +762,19 @@ export default function Home() {
     if (stage.mode === "cumulative") {
       const roundIndex = stage.roundIndex ?? 0;
       const roundUnlocked = stage.roundUnlocked ?? 1;
-      const currentPhrase = stage.phrases[roundIndex];
+      // roundIndex 0 & 1 → new phrase (0=with translator, 1=recall); 2+ → old phrases
+      const currentPhrase = stage.phrases[roundIndex <= 1 ? roundUnlocked - 1 : roundIndex - 2];
       if (!currentPhrase) return;
 
       if (stage.mistake) {
         if (normalize(val) !== normalize(stage.mistake.correct)) { setInput(""); return; }
-        // After retyping: continue round, mark as failed
-        setStage({ ...stage, roundIndex: roundIndex + 1 < roundUnlocked ? roundIndex + 1 : 0, mistake: null, hadMistakeInRound: true });
+        setStage({ ...stage, roundIndex: roundIndex + 1 <= roundUnlocked ? roundIndex + 1 : 0, mistake: null, hadMistakeInRound: true });
         setInput("");
         return;
       }
 
       if (normalize(val) === normalize(currentPhrase.target_text)) {
-        if (roundIndex < roundUnlocked - 1) {
+        if (roundIndex < roundUnlocked) {
           // Continue this round
           setStage({ ...stage, roundIndex: roundIndex + 1, mistake: null });
           setInput("");
@@ -633,7 +833,9 @@ export default function Home() {
     if (normalize(val) === normalize(currentPhrase.target_text)) {
       await advancePhrase(currentPhrase);
     } else {
-      // Both repeat and test: show the correct answer, require retyping
+      // Both repeat and test: show the correct answer, require retyping.
+      // Hearts only have stakes in Test mode.
+      if (stage.mode === "test") loseHeart();
       const prev = stage.wrongByPhrase[currentPhrase.phrase_index] ?? [];
       setStage({
         ...stage,
@@ -705,6 +907,46 @@ export default function Home() {
     }
   }
 
+  async function loadStory(src: string, tgt: string, lvl: string) {
+    setStage({ kind: "loading", message: "Writing your story…" });
+    try {
+      const res = await fetch(`/api/story?source=${src}&target=${tgt}&level=${lvl}`);
+      if (!res.ok) throw new Error(await res.text());
+      const story = (await res.json()) as Story;
+      setStage({ kind: "story", source: src, target: tgt, level: lvl, story });
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to create story");
+      setStage({ kind: "dashboard", data: emptyDashboard, refreshing: true });
+    }
+  }
+
+  function loadConversation(src: string, tgt: string, lvl: string) {
+    setStage({ kind: "conversation", source: src, target: tgt, level: lvl });
+  }
+
+  function loadWordTutor(src: string, tgt: string, lvl: string) {
+    setStage({ kind: "wordtutor", source: src, target: tgt, level: lvl });
+  }
+
+  async function loadQuiz(src: string, tgt: string, lvl: string, blockId: number, blockDescription: string) {
+    setStage({ kind: "loading", message: "Building your quiz…" });
+    try {
+      const res = await fetch(`/api/session-phrases?source=${src}&target=${tgt}&level=${lvl}&blockId=${blockId}`);
+      if (!res.ok) throw new Error(await res.text());
+      const data = await res.json();
+      const questions = buildQuiz((data.phrases ?? []) as PhraseItem[]);
+      if (questions.length === 0) {
+        setError("Not enough phrases in this block for a quiz yet.");
+        setStage({ kind: "dashboard", data: emptyDashboard, refreshing: true });
+        return;
+      }
+      setStage({ kind: "quiz", source: src, target: tgt, level: lvl, blockId, blockDescription, questions });
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to build quiz");
+      setStage({ kind: "dashboard", data: emptyDashboard, refreshing: true });
+    }
+  }
+
   async function loadBlockSession(src: string, tgt: string, lvl: string, mode: "repeat" | "test" | "cumulative", blockId?: number) {
     setSourceLang(src as LanguageCode);
     setTargetLang(tgt as LanguageCode);
@@ -716,10 +958,15 @@ export default function Home() {
       if (!res.ok) throw new Error();
       const data = await res.json();
       if (!data.block) { setStage({ kind: "block-create", submitting: false, error: null }); return; }
+      // Repeat/Test should run through THIS block from its first phrase (block-relative),
+      // not from the level-wide global progress. Cumulative drives position via roundUnlocked.
+      const phrases = (data.phrases ?? []) as PhraseItem[];
+      const firstIndex = phrases.length ? phrases[0].phrase_index : 0;
+      const startN = mode === "cumulative" ? data.currentN : firstIndex - 1;
       setStage({
         kind: "session", mode,
-        block: data.block, phrases: data.phrases,
-        currentN: data.currentN, submitting: false,
+        block: data.block, phrases,
+        currentN: startN, submitting: false,
         mistake: null, wrongByPhrase: {},
         ...(mode === "cumulative" ? { roundIndex: 0, roundUnlocked: 1, hadMistakeInRound: false } : {}),
       });
@@ -729,20 +976,19 @@ export default function Home() {
   /* ─── DASHBOARD ─── */
 
   if (stage.kind === "dashboard") {
-    const { progress, blocksByLang, streak } = stage.data;
+    const { progress, blocksByLang, streak, daily } = stage.data;
     const isRefreshing = stage.refreshing ?? false;
     return (
       <>
       <Page>
-        <Masthead user={session?.user} />
+        <Masthead user={session?.user} onOpenSettings={() => setSettingsOpen(true)} />
         <div className="flex-1 overflow-y-auto">
-          {/* Streak banner */}
+          {/* Streak */}
           {streak > 0 && (
-            <div className="px-10 lg:px-14 pt-5 pb-0">
+            <div className="px-10 lg:px-14 pt-5 pb-0 flex flex-wrap gap-3">
               <div className="inline-flex items-center gap-2 bg-paper border border-rule rounded-full px-4 py-2">
                 <span className="text-[20px]">🔥</span>
                 <span className="text-[16px] font-medium text-ink">{streak}-day streak</span>
-                <span className="text-[15px] text-ink-3">Keep it up!</span>
               </div>
             </div>
           )}
@@ -753,7 +999,7 @@ export default function Home() {
               <p className="text-[18px] text-ink-3 italic animate-pulse">Loading…</p>
             ) : progress.length === 0 ? (
               <p className="text-[18px] text-ink-3 italic">
-                Nothing started yet — start a new language below.
+                Nothing started yet — tap ⚙ Settings up top to start a new language.
               </p>
             ) : (
               <div className="space-y-5">
@@ -814,7 +1060,7 @@ export default function Home() {
                             setSourceLang(p.source_lang as LanguageCode);
                             setTargetLang(p.target_lang as LanguageCode);
                             setLevel(lvl as LevelCode);
-                            beginSessionRef.current?.scrollIntoView({ behavior: "smooth" });
+                            setSettingsOpen(true);
                           } else {
                             void loadBlockSession(p.source_lang, p.target_lang, lvl, "repeat");
                           }
@@ -833,33 +1079,33 @@ export default function Home() {
                               key={b.id}
                               className="flex items-center justify-between px-3.5 py-2.5 rounded-xl border border-rule bg-cream"
                             >
-                              <div className="flex items-center gap-2.5 min-w-0">
+                              <div className="flex items-center gap-2 min-w-0">
                                 <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${b.completed ? "bg-good" : "bg-terracotta"}`} />
-                                <span className="font-serif text-[18px] text-ink truncate">
+                                <span className="font-serif text-[15px] text-ink truncate">
                                   &ldquo;{b.description}&rdquo;
                                 </span>
-                                <span className="font-mono text-[18px] text-ink-3 shrink-0">
-                                  {b.phrase_count} phrases
+                                <span className="font-mono text-[12px] text-ink-3 shrink-0">
+                                  {b.phrase_count}
                                 </span>
                               </div>
-                              <div className="flex items-center gap-1.5 shrink-0">
+                              <div className="flex items-center gap-1 shrink-0 flex-wrap justify-end">
                                 <button
                                   onClick={() => { void loadBlockSession(p.source_lang, p.target_lang, p.level, "cumulative", b.id); }}
-                                  className="text-[18px] bg-terracotta text-paper rounded-full px-2.5 py-1 font-medium hover:opacity-85 transition-colors"
+                                  className="text-[13px] bg-terracotta text-paper rounded-full px-2 py-0.5 font-medium hover:opacity-85 transition-colors"
                                   title="Cumulative mode — new phrase only when all previous are perfect"
                                 >
                                   📚 Learn
                                 </button>
                                 <button
                                   onClick={() => { void loadBlockSession(p.source_lang, p.target_lang, p.level, "repeat", b.id); }}
-                                  className="text-[18px] bg-ink text-paper rounded-full px-2.5 py-1 font-medium hover:bg-ink-2 transition-colors"
+                                  className="text-[13px] bg-ink text-paper rounded-full px-2 py-0.5 font-medium hover:bg-ink-2 transition-colors"
                                   title="Repeat mode — mistakes are forgiving"
                                 >
                                   🔁 Repeat
                                 </button>
                                 <button
                                   onClick={() => { void loadBlockSession(p.source_lang, p.target_lang, p.level, "test", b.id); }}
-                                  className="text-[18px] border border-ink text-ink rounded-full px-2.5 py-1 font-medium hover:bg-ink hover:text-paper transition-colors"
+                                  className="text-[13px] border border-ink text-ink rounded-full px-2 py-0.5 font-medium hover:bg-ink hover:text-paper transition-colors"
                                   title="Test mode — one mistake resets everything"
                                 >
                                   📝 Test
@@ -875,9 +1121,16 @@ export default function Home() {
                                       setPhrasesModal({ source: src, target: tgt, level: lvl, blockDescription: b.description, phrases: data.phrases ?? [], loading: false });
                                     } catch { setPhrasesModal(null); }
                                   }}
-                                  className="text-[18px] border border-rule text-ink-2 rounded-full px-2.5 py-1 font-medium hover:text-ink hover:border-ink-3 transition-colors"
+                                  className="text-[13px] border border-rule text-ink-2 rounded-full px-2 py-0.5 font-medium hover:text-ink hover:border-ink-3 transition-colors"
                                 >
                                   👁 View list
+                                </button>
+                                <button
+                                  onClick={() => { void loadQuiz(p.source_lang, p.target_lang, p.level, b.id, b.description); }}
+                                  className="text-[13px] bg-good text-paper rounded-full px-2 py-0.5 font-medium hover:opacity-85 transition-colors"
+                                  title="Quiz — mixed question types (multiple choice, listening, fill-in-the-blank)"
+                                >
+                                  🧩 Quiz
                                 </button>
                               </div>
                             </div>
@@ -885,59 +1138,46 @@ export default function Home() {
                         )}
                       </div>
 
-                      {/* New block button */}
-                      <button
-                        onClick={async () => {
-                          setSourceLang(p.source_lang as LanguageCode);
-                          setTargetLang(p.target_lang as LanguageCode);
-                          setLevel(p.level as LevelCode);
-                          setStage({ kind: "block-create", submitting: false, error: null });
-                        }}
-                        className="mt-2 text-[18px] text-ink-2 hover:text-ink underline underline-offset-2"
-                      >
-                        + New block
-                      </button>
+                      {/* Actions */}
+                      <div className="mt-2.5 flex items-center gap-x-3.5 gap-y-1.5 flex-wrap">
+                        <button
+                          onClick={async () => {
+                            setSourceLang(p.source_lang as LanguageCode);
+                            setTargetLang(p.target_lang as LanguageCode);
+                            setLevel(p.level as LevelCode);
+                            setStage({ kind: "block-create", submitting: false, error: null });
+                          }}
+                          className="text-[13px] text-ink-2 hover:text-ink underline underline-offset-2"
+                        >
+                          + New block
+                        </button>
+                        <button
+                          onClick={() => { void loadStory(p.source_lang, p.target_lang, p.level); }}
+                          className="text-[13px] text-ink-2 hover:text-terracotta underline underline-offset-2"
+                          title="Read a short AI story built from words you've learned"
+                        >
+                          📖 Read a story
+                        </button>
+                        <button
+                          onClick={() => loadConversation(p.source_lang, p.target_lang, p.level)}
+                          className="text-[13px] text-ink-2 hover:text-terracotta underline underline-offset-2"
+                          title="Practice a real conversation with the AI in this language"
+                        >
+                          💬 Practice talking
+                        </button>
+                        <button
+                          onClick={() => loadWordTutor(p.source_lang, p.target_lang, p.level)}
+                          className="text-[13px] text-ink-2 hover:text-terracotta underline underline-offset-2"
+                          title="Ask the AI to teach you specific words or phrases you want to learn"
+                        >
+                          🔤 Ask for words
+                        </button>
+                      </div>
                     </div>
                   );
                 })}
               </div>
             )}
-          </div>
-
-          {/* Start new */}
-          <div ref={beginSessionRef} className="px-10 lg:px-14 py-9">
-            <div className="eyebrow text-terracotta mb-1">+ New</div>
-            <h2 className="font-serif text-2xl mb-5">Start a new language</h2>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 max-w-[640px]">
-              <FieldRow label="I speak">
-                <SelectField
-                  value={sourceLang}
-                  onChange={(v) => setSourceLang(v as LanguageCode)}
-                  options={LANGUAGES}
-                />
-              </FieldRow>
-              <FieldRow label="I want to learn">
-                <SelectField
-                  value={targetLang}
-                  onChange={(v) => setTargetLang(v as LanguageCode)}
-                  options={LANGUAGES}
-                  accent
-                />
-              </FieldRow>
-            </div>
-            <div className="mt-2 max-w-[640px]">
-              <FieldRow label="Level" last>
-                <LevelStrip active={level} onPick={setLevel} />
-              </FieldRow>
-            </div>
-            {error && <p className="text-bad text-base mt-3">{error}</p>}
-            <button
-              onClick={() => { void startSession(); }}
-              className={`${PRIMARY_BTN} mt-5`}
-            >
-              Begin session
-              <ArrowRight />
-            </button>
           </div>
 
           {/* Leaderboard */}
@@ -991,6 +1231,99 @@ export default function Home() {
           left={<span className="italic max-w-[300px] truncate">💬 {dashboardFooterQuote}</span>}
         />
       </Page>
+
+      {settingsOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+          <div className="absolute inset-0 bg-black/30" onClick={() => setSettingsOpen(false)} />
+          <div className="relative bg-paper border border-rule rounded-2xl shadow-2xl w-full max-w-[640px] max-h-[85vh] flex flex-col">
+            <div className="flex items-baseline justify-between px-6 pt-5 pb-3 border-b border-rule">
+              <div>
+                <div className="eyebrow text-terracotta mb-1">⚙ Settings</div>
+                <div className="font-serif text-2xl text-ink">Settings</div>
+              </div>
+            </div>
+            <div className="flex-1 overflow-y-auto px-6 py-5">
+              <div className="eyebrow text-terracotta mb-4">+ Start a new language</div>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <FieldRow label="I speak">
+                  <SelectField
+                    value={sourceLang}
+                    onChange={(v) => setSourceLang(v as LanguageCode)}
+                    options={LANGUAGES}
+                  />
+                </FieldRow>
+                <FieldRow label="I want to learn">
+                  <SelectField
+                    value={targetLang}
+                    onChange={(v) => setTargetLang(v as LanguageCode)}
+                    options={LANGUAGES}
+                    accent
+                  />
+                </FieldRow>
+              </div>
+              <div className="mt-2">
+                <FieldRow label="Level">
+                  <LevelStrip active={level} onPick={setLevel} />
+                </FieldRow>
+              </div>
+              <div className="mt-2">
+                <FieldRow label="Daily goal">
+                  <DailyGoalPill
+                    phrasesToday={daily.phrasesToday}
+                    dailyGoal={daily.dailyGoal}
+                    onGoalChange={async (goal) => {
+                      await fetch("/api/dashboard", {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ dailyGoal: goal }),
+                      });
+                      setStage((prev) =>
+                        prev.kind === "dashboard"
+                          ? { ...prev, data: { ...prev.data, daily: { ...prev.data.daily, dailyGoal: goal } } }
+                          : prev
+                      );
+                    }}
+                  />
+                </FieldRow>
+              </div>
+              <div className="mt-2">
+                <FieldRow label="Appearance" last>
+                  <div className="inline-flex items-center gap-1 bg-cream border border-rule rounded-full p-1">
+                    <button
+                      onClick={() => applyTheme("light")}
+                      className={`inline-flex items-center gap-1.5 rounded-full px-3.5 py-1.5 text-[14px] font-medium transition-colors ${theme === "light" ? "bg-paper text-ink shadow-sm" : "text-ink-3 hover:text-ink"}`}
+                    >
+                      ☀️ Light
+                    </button>
+                    <button
+                      onClick={() => applyTheme("dark")}
+                      className={`inline-flex items-center gap-1.5 rounded-full px-3.5 py-1.5 text-[14px] font-medium transition-colors ${theme === "dark" ? "bg-ink text-paper shadow-sm" : "text-ink-3 hover:text-ink"}`}
+                    >
+                      🌙 Dark
+                    </button>
+                  </div>
+                </FieldRow>
+              </div>
+              {error && <p className="text-bad text-base mt-3">{error}</p>}
+            </div>
+            <div className="px-6 py-4 border-t border-rule flex items-center justify-between gap-4">
+              <button
+                onClick={() => setSettingsOpen(false)}
+                className="text-[18px] text-ink-2 hover:text-ink underline underline-offset-2"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => { setSettingsOpen(false); void startSession(); }}
+                className={PRIMARY_BTN}
+              >
+                Begin session
+                <ArrowRight />
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {phrasesModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
@@ -1116,10 +1449,11 @@ export default function Home() {
     const roundIndex = stage.roundIndex ?? 0;
     const roundUnlocked = stage.roundUnlocked ?? 1;
     const currentPhrase = isCumulative
-      ? stage.phrases[roundIndex]
+      ? stage.phrases[roundIndex <= 1 ? roundUnlocked - 1 : roundIndex - 2]
       : stage.phrases.find((p) => p.phrase_index > stage.currentN);
     const doneCount = isCumulative ? roundUnlocked - 1 : stage.phrases.filter((p) => p.phrase_index <= stage.currentN).length;
     const totalCount = stage.phrases.length;
+    const hideTranslation = isCumulative && roundIndex > 0;
 
     return (
       <Page>
@@ -1131,7 +1465,41 @@ export default function Home() {
           }}
           onChange={() => setStage({ kind: "dashboard", data: emptyDashboard, refreshing: true })}
           user={session?.user}
+          hearts={stage.mode === "test" ? hearts : undefined}
         />
+
+        {stage.mode === "test" && hearts.hearts <= 0 && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+            <div className="absolute inset-0 bg-black/40" />
+            <div className="relative bg-paper border border-rule rounded-2xl shadow-2xl w-full max-w-[440px] px-8 py-9 text-center">
+              <div className="text-[52px] leading-none mb-3">💔</div>
+              <h2 className="font-serif text-3xl text-ink mb-2">Out of hearts</h2>
+              <p className="text-[17px] text-ink-2 leading-relaxed mb-6">
+                You ran out of hearts. A new one returns in about{" "}
+                <span className="font-medium text-ink">{Math.max(1, Math.ceil(hearts.nextHeartInMs / 60000))} min</span>.
+              </p>
+              <div className="flex flex-col gap-2.5">
+                <button
+                  onClick={async () => {
+                    try {
+                      const res = await fetch("/api/hearts");
+                      if (res.ok) setHearts((await res.json()) as HeartsState);
+                    } catch {}
+                  }}
+                  className={PRIMARY_BTN + " w-full justify-center"}
+                >
+                  Check again
+                </button>
+                <button
+                  onClick={() => setStage({ kind: "dashboard", data: emptyDashboard, refreshing: true })}
+                  className="text-[16px] text-ink-2 hover:text-ink underline underline-offset-2 py-1"
+                >
+                  Back to dashboard
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
 
         <div className="flex-1 grid grid-cols-1 lg:grid-cols-[1.4fr_1fr] min-h-0 overflow-hidden">
           {/* Left: current phrase + input */}
@@ -1142,7 +1510,11 @@ export default function Home() {
                   <div className="flex items-center gap-3">
                     <span className="eyebrow">
                       {isCumulative
-                        ? `📚 Learn · Round phrase ${roundIndex + 1} of ${roundUnlocked}${stage.hadMistakeInRound ? " · ✗ redo round" : ""}`
+                        ? roundIndex === 0
+                          ? `📚 Learn · New phrase ${roundUnlocked}${stage.hadMistakeInRound ? " · ✗ redo round" : ""}`
+                          : roundIndex === 1
+                          ? `📚 Learn · Recall new phrase${stage.hadMistakeInRound ? " · ✗ redo round" : ""}`
+                          : `📚 Learn · Recall ${roundIndex - 1} of ${roundUnlocked - 1}${stage.hadMistakeInRound ? " · ✗ redo round" : ""}`
                         : stage.mode === "test" ? `📝 Test · Phrase ${doneCount + 1} of ${totalCount}`
                         : `🔁 Repeat · Phrase ${doneCount + 1} of ${totalCount}`}
                     </span>
@@ -1155,9 +1527,11 @@ export default function Home() {
                     <div className="flex items-center gap-2 mb-2">
                       <span className="eyebrow text-bad">● {randomItem(MISTAKE_JOKES)}</span>
                     </div>
-                    <div className="text-[18px] text-ink-3 mb-1">
-                      {currentPhrase.source_text}
-                    </div>
+                    {!hideTranslation && (
+                      <div className="text-[18px] text-ink-3 mb-1">
+                        {currentPhrase.source_text}
+                      </div>
+                    )}
                     <div className="flex items-center gap-3 mb-1">
                       <div className="font-serif text-[50px] leading-[1.12] tracking-[-0.015em] text-ink">
                         {stage.mistake.correct}
@@ -1172,19 +1546,28 @@ export default function Home() {
                   </div>
                 ) : (
                   <div className="mt-2">
-                    <div className="eyebrow mb-2">{sourceLabel}</div>
-                    <div className="font-serif text-[54px] md:text-[58px] leading-[1.12] tracking-[-0.015em] text-ink mb-3">
-                      {currentPhrase.source_text}
-                    </div>
-                    <div className="flex items-center gap-3 mb-3">
-                      <SpeakerButton text={currentPhrase.target_text} langCode={targetLang} />
-                      <span className="text-[18px] text-ink-3">Hear {targetLabel} pronunciation</span>
-                    </div>
-                    {/* Reveal button for beginners who need a hint */}
-                    <ShowAnswerButton
-                      targetText={currentPhrase.target_text}
-                      targetLangCode={targetLang}
-                    />
+                    <div className="eyebrow mb-2">{hideTranslation ? "From memory" : sourceLabel}</div>
+                    {hideTranslation ? (
+                      <div className="font-serif text-[54px] md:text-[58px] leading-[1.12] tracking-[-0.015em] text-ink-3 italic mb-3 select-none">
+                        Recall from memory…
+                      </div>
+                    ) : (
+                      <div className="font-serif text-[54px] md:text-[58px] leading-[1.12] tracking-[-0.015em] text-ink mb-3">
+                        {currentPhrase.source_text}
+                      </div>
+                    )}
+                    {!hideTranslation && (
+                      <>
+                        <div className="flex items-center gap-3 mb-3">
+                          <SpeakerButton text={currentPhrase.target_text} langCode={targetLang} />
+                          <span className="text-[18px] text-ink-3">Hear {targetLabel} pronunciation</span>
+                        </div>
+                        <ShowAnswerButton
+                          targetText={currentPhrase.target_text}
+                          targetLangCode={targetLang}
+                        />
+                      </>
+                    )}
                   </div>
                 )}
 
@@ -1223,15 +1606,18 @@ export default function Home() {
                         void processAnswer(text);
                       }}
                     />
-                    <span className="font-mono text-[18px] text-ink-3 ml-1">↵</span>
+                    <button
+                      type="submit"
+                      disabled={!input.trim() || stage.submitting}
+                      className="w-9 h-9 rounded-full bg-ink text-paper flex items-center justify-center disabled:opacity-30 transition-opacity shrink-0 ml-1"
+                      aria-label="Submit"
+                    >
+                      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                        <path d="M22 2L11 13" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+                        <path d="M22 2L15 22L11 13L2 9L22 2Z" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+                      </svg>
+                    </button>
                   </label>
-                  <button
-                    type="submit"
-                    disabled={!input.trim() || stage.submitting}
-                    className="sr-only"
-                  >
-                    Submit
-                  </button>
                 </form>
               </>
             ) : (
@@ -1335,6 +1721,75 @@ export default function Home() {
           </span>
         </div>
       </Page>
+    );
+  }
+
+  /* ─── BLOCK DONE ─── */
+
+  /* ─── STORY ─── */
+
+  if (stage.kind === "story") {
+    const targetLabel = LANGUAGES.find((l) => l.code === stage.target)?.label ?? stage.target;
+    return (
+      <StoryView
+        story={stage.story}
+        targetLabel={targetLabel}
+        targetLang={stage.target}
+        level={stage.level}
+        user={session?.user}
+        onBack={() => setStage({ kind: "dashboard", data: emptyDashboard, refreshing: true })}
+        onAnother={() => { void loadStory(stage.source, stage.target, stage.level); }}
+      />
+    );
+  }
+
+  /* ─── QUIZ ─── */
+
+  if (stage.kind === "quiz") {
+    const targetLabel = LANGUAGES.find((l) => l.code === stage.target)?.label ?? stage.target;
+    return (
+      <QuizView
+        questions={stage.questions}
+        targetLabel={targetLabel}
+        targetLang={stage.target}
+        level={stage.level}
+        blockDescription={stage.blockDescription}
+        user={session?.user}
+        onBack={() => setStage({ kind: "dashboard", data: emptyDashboard, refreshing: true })}
+        onRetry={() => { void loadQuiz(stage.source, stage.target, stage.level, stage.blockId, stage.blockDescription); }}
+      />
+    );
+  }
+
+  /* ─── CONVERSATION ─── */
+
+  if (stage.kind === "conversation") {
+    const targetLabel = LANGUAGES.find((l) => l.code === stage.target)?.label ?? stage.target;
+    return (
+      <ConversationView
+        source={stage.source}
+        target={stage.target}
+        targetLabel={targetLabel}
+        level={stage.level}
+        user={session?.user}
+        onBack={() => setStage({ kind: "dashboard", data: emptyDashboard, refreshing: true })}
+      />
+    );
+  }
+
+  /* ─── WORD TUTOR ─── */
+
+  if (stage.kind === "wordtutor") {
+    const targetLabel = LANGUAGES.find((l) => l.code === stage.target)?.label ?? stage.target;
+    return (
+      <WordTutorView
+        source={stage.source}
+        target={stage.target}
+        targetLabel={targetLabel}
+        level={stage.level}
+        user={session?.user}
+        onBack={() => setStage({ kind: "dashboard", data: emptyDashboard, refreshing: true })}
+      />
     );
   }
 
@@ -1478,6 +1933,509 @@ function SpeakerButton({ text, langCode, size = "md" }: { text: string; langCode
   );
 }
 
+function speakNow(text: string, langCode: string) {
+  if (typeof window === "undefined" || !window.speechSynthesis) return;
+  window.speechSynthesis.cancel();
+  const utt = new SpeechSynthesisUtterance(text);
+  utt.lang = LANG_BCP47[langCode] ?? "en-US";
+  window.speechSynthesis.speak(utt);
+}
+
+function QuizView({
+  questions,
+  targetLabel,
+  targetLang,
+  level,
+  blockDescription,
+  user,
+  onBack,
+  onRetry,
+}: {
+  questions: QuizQuestion[];
+  targetLabel: string;
+  targetLang: string;
+  level: string;
+  blockDescription: string;
+  user?: { name?: string | null; email?: string | null; image?: string | null };
+  onBack: () => void;
+  onRetry: () => void;
+}) {
+  const [index, setIndex] = useState(0);
+  const [selected, setSelected] = useState<number | null>(null);
+  const [checked, setChecked] = useState(false);
+  const [score, setScore] = useState(0);
+  const [finished, setFinished] = useState(false);
+
+  const q = questions[index];
+  const total = questions.length;
+  const isLast = index === total - 1;
+
+  // Auto-play audio when a listening question appears.
+  useEffect(() => {
+    if (!finished && q?.type === "listening" && q.audioText) speakNow(q.audioText, targetLang);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [index, finished]);
+
+  function check() {
+    if (selected === null || checked) return;
+    if (selected === q.answerIndex) setScore((s) => s + 1);
+    setChecked(true);
+  }
+
+  function next() {
+    if (isLast) {
+      setFinished(true);
+      return;
+    }
+    setIndex((i) => i + 1);
+    setSelected(null);
+    setChecked(false);
+  }
+
+  if (finished) {
+    const pct = Math.round((score / total) * 100);
+    const emoji = pct === 100 ? "🏆" : pct >= 70 ? "🎉" : pct >= 40 ? "👍" : "📚";
+    return (
+      <Page>
+        <Masthead user={user} onChange={onBack} />
+        <div className="flex-1 grid place-items-center px-9">
+          <div className="text-center max-w-[440px]">
+            <div className="text-[64px] leading-none mb-4">{emoji}</div>
+            <div className="eyebrow text-terracotta mb-3">🧩 Quiz complete</div>
+            <h1 className="font-serif text-[52px] leading-none text-ink mb-3">{score} / {total}</h1>
+            <p className="text-[18px] text-ink-2 mb-8">
+              {pct === 100 ? "Perfect score!" : pct >= 70 ? "Nicely done." : "Keep practicing — you'll get there."}
+            </p>
+            <div className="flex items-center justify-center gap-3">
+              <button onClick={onRetry} className={PRIMARY_BTN}>🧩 New quiz</button>
+              <button onClick={onBack} className="text-[18px] text-ink-2 hover:text-ink underline underline-offset-2 px-3 py-2">
+                Back to dashboard
+              </button>
+            </div>
+          </div>
+        </div>
+      </Page>
+    );
+  }
+
+  if (!q) return null;
+
+  return (
+    <Page>
+      <Masthead
+        sessionInfo={{ pair: `🧩 Quiz · ${targetLabel} · ${level}`, done: index + (checked ? 1 : 0), total }}
+        onChange={onBack}
+        user={user}
+      />
+      <div className="flex-1 overflow-y-auto">
+        <div className="px-10 lg:px-14 py-9 max-w-[720px]">
+          <div className="flex items-center justify-between mb-6">
+            <span className="eyebrow">{q.promptLabel}</span>
+            <BlockDots done={index} total={total} />
+          </div>
+
+          {/* Prompt */}
+          {q.type === "listening" ? (
+            <div className="mb-7 flex items-center gap-4">
+              <button
+                onClick={() => q.audioText && speakNow(q.audioText, targetLang)}
+                className="inline-flex items-center gap-2.5 bg-ink text-paper rounded-full px-6 py-3.5 text-base font-medium hover:bg-ink-2 transition-colors"
+              >
+                🔊 Play again
+              </button>
+              <span className="text-[16px] text-ink-3 italic">Listen, then choose the meaning.</span>
+            </div>
+          ) : (
+            <div className="mb-7">
+              <div className="font-serif text-[40px] md:text-[46px] leading-[1.1] tracking-[-0.015em] text-ink">
+                {q.promptText}
+              </div>
+              {q.hint && <div className="text-[17px] text-ink-3 italic mt-2">{q.hint}</div>}
+            </div>
+          )}
+
+          {/* Options */}
+          <div className="grid gap-2.5 max-w-[560px]">
+            {q.options.map((opt, oi) => {
+              const isAnswer = oi === q.answerIndex;
+              const isPicked = selected === oi;
+              let cls = "border-rule bg-paper hover:border-ink-3";
+              if (checked) {
+                if (isAnswer) cls = "border-good bg-good/10";
+                else if (isPicked) cls = "border-bad bg-bad/10";
+                else cls = "border-rule bg-paper opacity-60";
+              } else if (isPicked) {
+                cls = "border-ink bg-cream";
+              }
+              return (
+                <button
+                  key={oi}
+                  disabled={checked}
+                  onClick={() => setSelected(oi)}
+                  className={`text-left text-[20px] px-5 py-3.5 rounded-xl border transition-colors ${cls}`}
+                >
+                  {opt}
+                  {checked && isAnswer && <span className="text-good font-medium"> ✓</span>}
+                  {checked && isPicked && !isAnswer && <span className="text-bad font-medium"> ✗</span>}
+                </button>
+              );
+            })}
+          </div>
+
+          {/* Action */}
+          <div className="mt-7">
+            {!checked ? (
+              <button onClick={check} disabled={selected === null} className={PRIMARY_BTN}>
+                Check
+              </button>
+            ) : (
+              <button onClick={next} className={PRIMARY_BTN}>
+                {isLast ? "See results" : "Next"}
+                <ArrowRight />
+              </button>
+            )}
+          </div>
+        </div>
+      </div>
+      <Footer left={<span className="italic max-w-[320px] truncate">🧩 &ldquo;{blockDescription}&rdquo;</span>} />
+    </Page>
+  );
+}
+
+function ConversationBubble({ content, targetLang }: { content: string; targetLang: string }) {
+  // Assistant content has optional "✎ correction" and "↳ translation" lines.
+  const lines = content.split("\n").map((l) => l.trim()).filter((l) => l.length > 0);
+  const correction = lines.find((l) => l.startsWith("✎"));
+  const translation = lines.find((l) => l.startsWith("↳"));
+  const reply = lines.filter((l) => !l.startsWith("✎") && !l.startsWith("↳")).join(" ");
+  return (
+    <div className="space-y-1.5">
+      {correction && (
+        <div className="text-[14px] text-terracotta bg-terracotta/10 border border-terracotta/20 rounded-lg px-3 py-1.5">
+          {correction.replace(/^✎\s*/, "✎ ")}
+        </div>
+      )}
+      {reply && (
+        <div className="flex items-start gap-2">
+          <span className="font-serif text-[20px] text-ink leading-snug flex-1">{reply}</span>
+          <SpeakerButton text={reply} langCode={targetLang} size="sm" />
+        </div>
+      )}
+      {translation && (
+        <div className="text-[15px] text-ink-3 italic">{translation.replace(/^↳\s*/, "")}</div>
+      )}
+      {!reply && !correction && !translation && <span className="text-ink-3">…</span>}
+    </div>
+  );
+}
+
+function ConversationView({
+  source,
+  target,
+  targetLabel,
+  level,
+  user,
+  onBack,
+}: {
+  source: string;
+  target: string;
+  targetLabel: string;
+  level: string;
+  user?: { name?: string | null; email?: string | null; image?: string | null };
+  onBack: () => void;
+}) {
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [input, setInput] = useState("");
+  const [streaming, setStreaming] = useState(false);
+  const [started, setStarted] = useState(false);
+  const bottomRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [messages]);
+
+  async function streamReply(history: ChatMessage[]) {
+    setMessages([...history, { role: "assistant", content: "" }]);
+    setStreaming(true);
+    try {
+      const res = await fetch("/api/conversation", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ source, target, level, messages: history }),
+      });
+      if (!res.ok || !res.body) throw new Error("Failed");
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        const chunk = decoder.decode(value);
+        setMessages((prev) => {
+          const updated = [...prev];
+          const last = updated[updated.length - 1];
+          if (last?.role === "assistant") updated[updated.length - 1] = { ...last, content: last.content + chunk };
+          return updated;
+        });
+      }
+    } catch {
+      setMessages((prev) => {
+        const updated = [...prev];
+        const last = updated[updated.length - 1];
+        if (last?.role === "assistant" && !last.content) {
+          updated[updated.length - 1] = { ...last, content: "Something went wrong. Try again." };
+        }
+        return updated;
+      });
+    } finally {
+      setStreaming(false);
+      setTimeout(() => inputRef.current?.focus(), 0);
+    }
+  }
+
+  // Kick off with an AI opener.
+  useEffect(() => {
+    if (started) return;
+    setStarted(true);
+    void streamReply([]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  function send() {
+    const text = input.trim();
+    if (!text || streaming) return;
+    setInput("");
+    const history: ChatMessage[] = [...messages, { role: "user", content: text }];
+    void streamReply(history);
+  }
+
+  return (
+    <Page>
+      <Masthead
+        sessionInfo={{ pair: `💬 Conversation · ${targetLabel} · ${level}`, done: 0, total: 0 }}
+        onChange={onBack}
+        user={user}
+      />
+      <div className="flex-1 overflow-y-auto px-6 lg:px-12 py-7">
+        <div className="max-w-[680px] mx-auto space-y-5">
+          <p className="text-[15px] text-ink-3 italic text-center">
+            Chat in {targetLabel}. The AI keeps it simple, corrects gently (✎), and translates (↳).
+          </p>
+          {messages.map((m, i) =>
+            m.role === "assistant" ? (
+              <div key={i} className="bg-paper border border-rule rounded-2xl rounded-tl-md px-4 py-3 max-w-[88%]">
+                <ConversationBubble content={m.content} targetLang={target} />
+              </div>
+            ) : (
+              <div key={i} className="bg-ink text-paper rounded-2xl rounded-tr-md px-4 py-2.5 max-w-[88%] ml-auto">
+                <span className="text-[18px] leading-snug">{m.content}</span>
+              </div>
+            ),
+          )}
+          <div ref={bottomRef} />
+        </div>
+      </div>
+      <div className="border-t border-rule px-6 lg:px-12 py-3.5">
+        <div className="max-w-[680px] mx-auto flex items-center gap-2.5">
+          <MicButton langCode={target} onResult={(t) => setInput((prev) => (prev ? prev + " " + t : t))} />
+          <form
+            onSubmit={(e) => { e.preventDefault(); send(); }}
+            className="flex-1 flex items-center gap-2.5 bg-paper border border-ink rounded-xl px-4 py-2.5"
+          >
+            <input
+              ref={inputRef}
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              placeholder={`Reply in ${targetLabel}…`}
+              className="flex-1 bg-transparent outline-none text-[18px] text-ink"
+            />
+            <button
+              type="submit"
+              disabled={streaming || !input.trim()}
+              className="shrink-0 bg-ink text-paper rounded-full px-4 py-1.5 text-[15px] font-medium hover:bg-ink-2 transition-colors disabled:opacity-40"
+            >
+              Send
+            </button>
+          </form>
+        </div>
+      </div>
+    </Page>
+  );
+}
+
+function WordListBubble({ content, targetLang }: { content: string; targetLang: string }) {
+  const lines = content.split("\n").map((l) => l.trim()).filter((l) => l.length > 0);
+  const items: { target: string; source: string }[] = [];
+  const intro: string[] = [];
+  for (const line of lines) {
+    const bullet = line.replace(/^[•\-*]\s*/, "");
+    if (line !== bullet && bullet.includes("—")) {
+      const [target, ...rest] = bullet.split("—");
+      items.push({ target: target.trim(), source: rest.join("—").trim() });
+    } else {
+      intro.push(line);
+    }
+  }
+  return (
+    <div className="space-y-2.5">
+      {intro.map((t, i) => (
+        <p key={i} className="text-[16px] text-ink-2">{t}</p>
+      ))}
+      {items.length > 0 && (
+        <div className="space-y-1.5">
+          {items.map((it, i) => (
+            <div key={i} className="flex items-center gap-2.5 bg-cream border border-rule rounded-xl px-3.5 py-2.5">
+              <SpeakerButton text={it.target} langCode={targetLang} size="sm" />
+              <span className="font-serif text-[22px] text-ink leading-tight">{it.target}</span>
+              <span className="text-[16px] text-ink-3 ml-auto text-right">{it.source}</span>
+            </div>
+          ))}
+        </div>
+      )}
+      {intro.length === 0 && items.length === 0 && <span className="text-ink-3">…</span>}
+    </div>
+  );
+}
+
+function WordTutorView({
+  source,
+  target,
+  targetLabel,
+  level,
+  user,
+  onBack,
+}: {
+  source: string;
+  target: string;
+  targetLabel: string;
+  level: string;
+  user?: { name?: string | null; email?: string | null; image?: string | null };
+  onBack: () => void;
+}) {
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [input, setInput] = useState("");
+  const [streaming, setStreaming] = useState(false);
+  const bottomRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: "smooth" }); }, [messages]);
+  useEffect(() => { setTimeout(() => inputRef.current?.focus(), 100); }, []);
+
+  async function ask(text: string) {
+    const q = text.trim();
+    if (!q || streaming) return;
+    setInput("");
+    const history: ChatMessage[] = [...messages, { role: "user", content: q }];
+    setMessages([...history, { role: "assistant", content: "" }]);
+    setStreaming(true);
+    try {
+      const res = await fetch("/api/word-tutor", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ source, target, level, messages: history }),
+      });
+      if (!res.ok || !res.body) throw new Error("Failed");
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        const chunk = decoder.decode(value);
+        setMessages((prev) => {
+          const updated = [...prev];
+          const last = updated[updated.length - 1];
+          if (last?.role === "assistant") updated[updated.length - 1] = { ...last, content: last.content + chunk };
+          return updated;
+        });
+      }
+    } catch {
+      setMessages((prev) => {
+        const updated = [...prev];
+        const last = updated[updated.length - 1];
+        if (last?.role === "assistant" && !last.content) {
+          updated[updated.length - 1] = { ...last, content: "Something went wrong. Try again." };
+        }
+        return updated;
+      });
+    } finally {
+      setStreaming(false);
+      setTimeout(() => inputRef.current?.focus(), 0);
+    }
+  }
+
+  const SUGGESTIONS = ["Food and drinks", "At the market", "Greetings", "How do I say “I'm tired”?"];
+
+  return (
+    <Page>
+      <Masthead
+        sessionInfo={{ pair: `🔤 Word tutor · ${targetLabel} · ${level}`, done: 0, total: 0 }}
+        onChange={onBack}
+        user={user}
+      />
+      <div className="flex-1 overflow-y-auto px-6 lg:px-12 py-7">
+        <div className="max-w-[680px] mx-auto space-y-5">
+          {messages.length === 0 ? (
+            <div className="text-center py-6">
+              <div className="text-[44px] mb-3">🔤</div>
+              <h2 className="font-serif text-2xl text-ink mb-2">What do you want to learn?</h2>
+              <p className="text-[16px] text-ink-3 mb-6">
+                Ask for any topic or phrase — I&rsquo;ll teach you {targetLabel} words with translations.
+              </p>
+              <div className="flex flex-wrap gap-2 justify-center">
+                {SUGGESTIONS.map((s) => (
+                  <button
+                    key={s}
+                    onClick={() => { void ask(s); }}
+                    className="text-[15px] border border-rule bg-paper rounded-full px-3.5 py-1.5 text-ink-2 hover:border-ink-3 hover:text-ink transition-colors"
+                  >
+                    {s}
+                  </button>
+                ))}
+              </div>
+            </div>
+          ) : (
+            messages.map((m, i) =>
+              m.role === "assistant" ? (
+                <div key={i} className="bg-paper border border-rule rounded-2xl rounded-tl-md px-4 py-3.5">
+                  <WordListBubble content={m.content} targetLang={target} />
+                </div>
+              ) : (
+                <div key={i} className="bg-ink text-paper rounded-2xl rounded-tr-md px-4 py-2.5 max-w-[88%] ml-auto">
+                  <span className="text-[18px] leading-snug">{m.content}</span>
+                </div>
+              ),
+            )
+          )}
+          <div ref={bottomRef} />
+        </div>
+      </div>
+      <div className="border-t border-rule px-6 lg:px-12 py-3.5">
+        <div className="max-w-[680px] mx-auto flex items-center gap-2.5">
+          <form
+            onSubmit={(e) => { e.preventDefault(); void ask(input); }}
+            className="flex-1 flex items-center gap-2.5 bg-paper border border-ink rounded-xl px-4 py-2.5"
+          >
+            <input
+              ref={inputRef}
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              placeholder="e.g. words for ordering coffee…"
+              className="flex-1 bg-transparent outline-none text-[18px] text-ink"
+            />
+            <button
+              type="submit"
+              disabled={streaming || !input.trim()}
+              className="shrink-0 bg-ink text-paper rounded-full px-4 py-1.5 text-[15px] font-medium hover:bg-ink-2 transition-colors disabled:opacity-40"
+            >
+              Ask
+            </button>
+          </form>
+        </div>
+      </div>
+    </Page>
+  );
+}
+
 // Extend Window type for SpeechRecognition
 declare global {
   interface Window {
@@ -1551,6 +2509,155 @@ function MicButton({ langCode, onResult }: { langCode: string; onResult: (text: 
         <line x1="4.5" y1="17" x2="9.5" y2="17" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
       </svg>
     </button>
+  );
+}
+
+function StoryView({
+  story,
+  targetLabel,
+  targetLang,
+  level,
+  user,
+  onBack,
+  onAnother,
+}: {
+  story: Story;
+  targetLabel: string;
+  targetLang: string;
+  level: string;
+  user?: { name?: string | null; email?: string | null; image?: string | null };
+  onBack: () => void;
+  onAnother: () => void;
+}) {
+  const [revealed, setRevealed] = useState<Record<number, boolean>>({});
+  const [answers, setAnswers] = useState<Record<number, number>>({});
+  const [checked, setChecked] = useState(false);
+
+  const total = story.questions.length;
+  const correct = story.questions.reduce((n, q, i) => n + (answers[i] === q.answerIndex ? 1 : 0), 0);
+  const allAnswered = story.questions.every((_, i) => answers[i] !== undefined);
+
+  function revealAll() {
+    const all: Record<number, boolean> = {};
+    story.sentences.forEach((_, i) => { all[i] = true; });
+    setRevealed(all);
+  }
+
+  return (
+    <Page>
+      <Masthead user={user} onChange={onBack} />
+      <div className="flex-1 overflow-y-auto">
+        {/* Title */}
+        <div className="px-10 lg:px-14 pt-10 pb-7 border-b border-rule">
+          <div className="eyebrow text-terracotta mb-3">📖 Story · {targetLabel} · {level}</div>
+          <div className="flex items-center gap-3 flex-wrap">
+            <h1 className="font-serif text-[40px] md:text-[48px] leading-[1.05] tracking-[-0.02em] text-ink">
+              {story.title}
+            </h1>
+            <SpeakerButton text={story.title} langCode={targetLang} />
+          </div>
+          {story.titleSource && (
+            <div className="text-[18px] text-ink-3 italic mt-1">{story.titleSource}</div>
+          )}
+        </div>
+
+        {/* Sentences */}
+        <div className="px-10 lg:px-14 py-8 border-b border-rule max-w-[760px]">
+          <div className="space-y-5">
+            {story.sentences.map((s, i) => (
+              <div key={i} className="flex items-start gap-3">
+                <SpeakerButton text={s.target} langCode={targetLang} size="sm" />
+                <div className="flex-1 min-w-0">
+                  <div className="font-serif text-[26px] text-ink leading-snug">{s.target}</div>
+                  {revealed[i] ? (
+                    <div className="text-[17px] text-ink-3 mt-1">{s.source}</div>
+                  ) : (
+                    <button
+                      onClick={() => setRevealed((r) => ({ ...r, [i]: true }))}
+                      className="text-[15px] text-ink-2 hover:text-ink underline underline-offset-2 mt-1"
+                    >
+                      Show translation
+                    </button>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+          <button
+            onClick={revealAll}
+            className="mt-5 text-[15px] text-ink-2 hover:text-ink underline underline-offset-2"
+          >
+            Reveal all translations
+          </button>
+        </div>
+
+        {/* Comprehension */}
+        {total > 0 && (
+          <div className="px-10 lg:px-14 py-8 max-w-[760px]">
+            <div className="eyebrow text-terracotta mb-5">✎ Comprehension</div>
+            <div className="space-y-6">
+              {story.questions.map((q, qi) => (
+                <div key={qi}>
+                  <div className="text-[19px] text-ink font-medium mb-2.5">{qi + 1}. {q.question}</div>
+                  <div className="grid gap-2">
+                    {q.options.map((opt, oi) => {
+                      const selected = answers[qi] === oi;
+                      const isCorrect = q.answerIndex === oi;
+                      let cls = "border-rule bg-paper hover:border-ink-3";
+                      if (checked) {
+                        if (isCorrect) cls = "border-good bg-good/10";
+                        else if (selected) cls = "border-bad bg-bad/10";
+                        else cls = "border-rule bg-paper opacity-60";
+                      } else if (selected) {
+                        cls = "border-ink bg-cream";
+                      }
+                      return (
+                        <button
+                          key={oi}
+                          disabled={checked}
+                          onClick={() => setAnswers((a) => ({ ...a, [qi]: oi }))}
+                          className={`text-left text-[17px] px-4 py-2.5 rounded-xl border transition-colors ${cls}`}
+                        >
+                          {opt}
+                          {checked && isCorrect && <span className="text-good font-medium"> ✓</span>}
+                          {checked && selected && !isCorrect && <span className="text-bad font-medium"> ✗</span>}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              ))}
+            </div>
+            {!checked ? (
+              <button
+                onClick={() => setChecked(true)}
+                disabled={!allAnswered}
+                className={`${PRIMARY_BTN} mt-6`}
+              >
+                Check answers
+              </button>
+            ) : (
+              <div className="mt-6 inline-flex items-center gap-3 bg-paper border border-rule rounded-2xl px-5 py-3.5">
+                <span className="text-[28px]">{correct === total ? "🎉" : correct >= total / 2 ? "👏" : "📚"}</span>
+                <span className="font-serif text-2xl text-ink">{correct} / {total} correct</span>
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+      <Footer
+        left={
+          <button onClick={onAnother} className="text-ink-2 hover:text-ink underline underline-offset-2">
+            📖 Read another story
+          </button>
+        }
+        right={
+          <button onClick={onBack} className="text-ink-2 hover:text-ink underline underline-offset-2">
+            Back to dashboard
+          </button>
+        }
+      />
+    </Page>
   );
 }
 
@@ -1719,6 +2826,74 @@ function BlockDots({ done, total }: { done: number; total: number }) {
           style={{ width: i === done ? 12 : 5 }}
         />
       ))}
+    </div>
+  );
+}
+
+function DailyGoalPill({
+  phrasesToday,
+  dailyGoal,
+  onGoalChange,
+}: {
+  phrasesToday: number;
+  dailyGoal: number;
+  onGoalChange: (goal: number) => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [input, setInput] = useState(String(dailyGoal));
+  const inputRef = useRef<HTMLInputElement>(null);
+  const pct = Math.min(100, Math.round((phrasesToday / dailyGoal) * 100));
+  const done = phrasesToday >= dailyGoal;
+
+  function save() {
+    const n = parseInt(input, 10);
+    if (n > 0) onGoalChange(n);
+    setEditing(false);
+  }
+
+  useEffect(() => {
+    if (editing) inputRef.current?.select();
+  }, [editing]);
+
+  return (
+    <div className="inline-flex items-center gap-3 bg-paper border border-rule rounded-full px-4 py-2">
+      <span className="text-[20px]">{done ? "✅" : "🎯"}</span>
+      <div className="flex flex-col gap-0.5">
+        <div className="flex items-center gap-1.5">
+          <span className="text-[15px] font-medium text-ink">
+            {phrasesToday}
+          </span>
+          <span className="text-[14px] text-ink-3">/</span>
+          {editing ? (
+            <form onSubmit={(e) => { e.preventDefault(); save(); }} className="inline">
+              <input
+                ref={inputRef}
+                value={input}
+                onChange={(e) => setInput(e.target.value)}
+                onBlur={save}
+                className="w-10 text-[15px] font-medium text-ink bg-cream border border-rule rounded px-1 outline-none"
+                type="number"
+                min="1"
+                max="200"
+              />
+            </form>
+          ) : (
+            <button
+              onClick={() => { setInput(String(dailyGoal)); setEditing(true); }}
+              className="text-[15px] text-ink-3 underline underline-offset-2 hover:text-ink transition-colors"
+            >
+              {dailyGoal}
+            </button>
+          )}
+          <span className="text-[14px] text-ink-3">today</span>
+        </div>
+        <div className="w-24 h-1.5 bg-cream rounded-full overflow-hidden">
+          <div
+            className={`h-full rounded-full transition-all ${done ? "bg-good" : "bg-terracotta"}`}
+            style={{ width: `${pct}%` }}
+          />
+        </div>
+      </div>
     </div>
   );
 }
