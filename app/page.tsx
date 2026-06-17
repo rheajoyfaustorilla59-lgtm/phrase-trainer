@@ -89,7 +89,7 @@ type Stage =
   | { kind: "loading"; message?: string; blockGeneration?: boolean }
   | {
       kind: "session";
-      mode: "repeat" | "test" | "cumulative";
+      mode: "repeat" | "test" | "cumulative" | "choice";
       block: SessionBlock;
       phrases: PhraseItem[];
       currentN: number;
@@ -99,8 +99,10 @@ type Stage =
       roundIndex?: number;
       roundUnlocked?: number;
       hadMistakeInRound?: boolean;
+      choiceSelected?: number | null;
+      choiceCorrect?: boolean | null;
     }
-  | { kind: "block-done"; block: SessionBlock; phrases: PhraseItem[]; words: string[]; wordCount: number }
+  | { kind: "block-done"; block: SessionBlock; phrases: PhraseItem[]; words: string[]; wordCount: number; wrongByPhrase: Record<number, string[]> }
   | { kind: "story"; source: string; target: string; level: string; story: Story }
   | { kind: "quiz"; source: string; target: string; level: string; blockId: number; blockDescription: string; questions: QuizQuestion[] }
   | { kind: "conversation"; source: string; target: string; level: string }
@@ -466,6 +468,63 @@ function ArrowRight() {
   );
 }
 
+/* ─── Per-block action menu (primary button + ▾ dropdown) ─── */
+
+function BlockActions({
+  onLearn, onRepeat, onTest, onChoice, onView, onQuiz,
+}: {
+  onLearn: () => void;
+  onRepeat: () => void;
+  onTest: () => void;
+  onChoice: () => void;
+  onView: () => void;
+  onQuiz: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    function handleClick(e: MouseEvent) {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    }
+    document.addEventListener("mousedown", handleClick);
+    return () => document.removeEventListener("mousedown", handleClick);
+  }, []);
+
+  const item =
+    "text-left text-[13px] px-3 py-2 hover:bg-cream transition-colors text-ink-2 hover:text-ink";
+
+  return (
+    <div className="flex items-center gap-1 shrink-0 relative" ref={ref}>
+      <button
+        onClick={onLearn}
+        className="text-[13px] bg-terracotta text-paper rounded-full px-2 py-0.5 font-medium hover:opacity-85 transition-colors"
+        title="Cumulative mode — new phrase only when all previous are perfect"
+      >
+        📚 Learn
+      </button>
+      <button
+        onClick={() => setOpen((v) => !v)}
+        className="text-[13px] border border-rule text-ink-2 rounded-full px-1.5 py-0.5 font-medium hover:border-ink hover:text-ink transition-colors"
+        title="More practice modes"
+        aria-label="More practice modes"
+      >
+        ▾
+      </button>
+
+      {open && (
+        <div className="absolute right-0 top-full mt-1 w-[150px] bg-paper border border-rule rounded-xl shadow-[0_8px_32px_-8px_rgba(26,23,20,0.2)] overflow-hidden z-50 flex flex-col">
+          <button className={item} onClick={() => { setOpen(false); onRepeat(); }} title="Repeat mode — mistakes are forgiving">🔁 Repeat</button>
+          <button className={item} onClick={() => { setOpen(false); onTest(); }} title="Test mode — one mistake resets everything">📝 Test</button>
+          <button className={item} onClick={() => { setOpen(false); onChoice(); }} title="Multiple choice — pick the correct translation">🔤 Choice</button>
+          <button className={item} onClick={() => { setOpen(false); onView(); }}>👁 View list</button>
+          <button className={item} onClick={() => { setOpen(false); onQuiz(); }} title="Quiz — mixed question types">🧩 Quiz</button>
+        </div>
+      )}
+    </div>
+  );
+}
+
 /* ─── Main component ─── */
 
 export default function Home() {
@@ -505,11 +564,24 @@ export default function Home() {
   const [funnyQuote] = useState(() => randomItem(FUNNY_QUOTES));
   const [loadingQuote] = useState(() => randomItem(FUNNY_QUOTES));
   const [dashboardFooterQuote] = useState(() => randomItem(FUNNY_QUOTES));
+  const [choiceOptions, setChoiceOptions] = useState<string[]>([]);
+  const [choiceState, setChoiceState] = useState<"idle" | "correct" | "wrong">("idle");
   const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     if (stage.kind === "session") inputRef.current?.focus();
   }, [stage.kind]);
+
+  useEffect(() => {
+    if (stage.kind !== "session" || stage.mode !== "choice") return;
+    const phrase = stage.phrases.find(p => p.phrase_index > stage.currentN);
+    if (!phrase) return;
+    const correct = phrase.target_text;
+    const pool = stage.phrases.filter(p => p.target_text !== correct).map(p => p.target_text);
+    const wrong = pool.sort(() => 0.5 - Math.random()).slice(0, 3);
+    setChoiceOptions([...wrong, correct].sort(() => 0.5 - Math.random()));
+    setChoiceState("idle");
+  }, [stage.kind, stage.kind === "session" ? (stage as {currentN: number}).currentN : null]);
 
 
   const dashboardNeedsRefresh = stage.kind === "dashboard" && !!stage.refreshing;
@@ -875,11 +947,11 @@ export default function Home() {
                 const res = await fetch(`/api/known-words?source=${sourceLang}&target=${targetLang}&level=${level}`);
                 if (res.ok) {
                   const data = (await res.json()) as KnownWordsData;
-                  setStage({ kind: "block-done", block: prev.block, phrases: prev.phrases, words: data.words, wordCount: data.count });
+                  setStage({ kind: "block-done", block: prev.block, phrases: prev.phrases, words: data.words, wordCount: data.count, wrongByPhrase: prev.wrongByPhrase });
                 }
               } catch {}
             })();
-            return { kind: "block-done", block: prev.block, phrases: prev.phrases, words: [], wordCount: 0 };
+            return { kind: "block-done", block: prev.block, phrases: prev.phrases, words: [], wordCount: 0, wrongByPhrase: prev.wrongByPhrase };
           }
           return { ...prev, submitting: false, mistake: null, roundIndex: 0, roundUnlocked: newRoundUnlocked, hadMistakeInRound: false };
         }
@@ -892,11 +964,11 @@ export default function Home() {
               const res = await fetch(`/api/known-words?source=${sourceLang}&target=${targetLang}&level=${level}`);
               if (res.ok) {
                 const data = (await res.json()) as KnownWordsData;
-                setStage({ kind: "block-done", block: prev.block, phrases: prev.phrases, words: data.words, wordCount: data.count });
+                setStage({ kind: "block-done", block: prev.block, phrases: prev.phrases, words: data.words, wordCount: data.count, wrongByPhrase: prev.wrongByPhrase });
               }
             } catch {}
           })();
-          return { kind: "block-done", block: prev.block, phrases: prev.phrases, words: [], wordCount: 0 };
+          return { kind: "block-done", block: prev.block, phrases: prev.phrases, words: [], wordCount: 0, wrongByPhrase: prev.wrongByPhrase };
         }
         return { ...prev, currentN: newCurrentN, submitting: false, mistake: null };
       });
@@ -947,7 +1019,7 @@ export default function Home() {
     }
   }
 
-  async function loadBlockSession(src: string, tgt: string, lvl: string, mode: "repeat" | "test" | "cumulative", blockId?: number) {
+  async function loadBlockSession(src: string, tgt: string, lvl: string, mode: "repeat" | "test" | "cumulative" | "choice", blockId?: number) {
     setSourceLang(src as LanguageCode);
     setTargetLang(tgt as LanguageCode);
     setLevel(lvl as LevelCode);
@@ -1088,51 +1160,23 @@ export default function Home() {
                                   {b.phrase_count}
                                 </span>
                               </div>
-                              <div className="flex items-center gap-1 shrink-0 flex-wrap justify-end">
-                                <button
-                                  onClick={() => { void loadBlockSession(p.source_lang, p.target_lang, p.level, "cumulative", b.id); }}
-                                  className="text-[13px] bg-terracotta text-paper rounded-full px-2 py-0.5 font-medium hover:opacity-85 transition-colors"
-                                  title="Cumulative mode — new phrase only when all previous are perfect"
-                                >
-                                  📚 Learn
-                                </button>
-                                <button
-                                  onClick={() => { void loadBlockSession(p.source_lang, p.target_lang, p.level, "repeat", b.id); }}
-                                  className="text-[13px] bg-ink text-paper rounded-full px-2 py-0.5 font-medium hover:bg-ink-2 transition-colors"
-                                  title="Repeat mode — mistakes are forgiving"
-                                >
-                                  🔁 Repeat
-                                </button>
-                                <button
-                                  onClick={() => { void loadBlockSession(p.source_lang, p.target_lang, p.level, "test", b.id); }}
-                                  className="text-[13px] border border-ink text-ink rounded-full px-2 py-0.5 font-medium hover:bg-ink hover:text-paper transition-colors"
-                                  title="Test mode — one mistake resets everything"
-                                >
-                                  📝 Test
-                                </button>
-                                <button
-                                  onClick={async () => {
-                                    const src = p.source_lang; const tgt = p.target_lang; const lvl = p.level;
-                                    setPhrasesModal({ source: src, target: tgt, level: lvl, blockDescription: b.description, phrases: [], loading: true });
-                                    try {
-                                      const res = await fetch(`/api/session-phrases?source=${src}&target=${tgt}&level=${lvl}`);
-                                      if (!res.ok) throw new Error();
-                                      const data = await res.json();
-                                      setPhrasesModal({ source: src, target: tgt, level: lvl, blockDescription: b.description, phrases: data.phrases ?? [], loading: false });
-                                    } catch { setPhrasesModal(null); }
-                                  }}
-                                  className="text-[13px] border border-rule text-ink-2 rounded-full px-2 py-0.5 font-medium hover:text-ink hover:border-ink-3 transition-colors"
-                                >
-                                  👁 View list
-                                </button>
-                                <button
-                                  onClick={() => { void loadQuiz(p.source_lang, p.target_lang, p.level, b.id, b.description); }}
-                                  className="text-[13px] bg-good text-paper rounded-full px-2 py-0.5 font-medium hover:opacity-85 transition-colors"
-                                  title="Quiz — mixed question types (multiple choice, listening, fill-in-the-blank)"
-                                >
-                                  🧩 Quiz
-                                </button>
-                              </div>
+                              <BlockActions
+                                onLearn={() => { void loadBlockSession(p.source_lang, p.target_lang, p.level, "cumulative", b.id); }}
+                                onRepeat={() => { void loadBlockSession(p.source_lang, p.target_lang, p.level, "repeat", b.id); }}
+                                onTest={() => { void loadBlockSession(p.source_lang, p.target_lang, p.level, "test", b.id); }}
+                                onChoice={() => { void loadBlockSession(p.source_lang, p.target_lang, p.level, "choice", b.id); }}
+                                onView={async () => {
+                                  const src = p.source_lang; const tgt = p.target_lang; const lvl = p.level;
+                                  setPhrasesModal({ source: src, target: tgt, level: lvl, blockDescription: b.description, phrases: [], loading: true });
+                                  try {
+                                    const res = await fetch(`/api/session-phrases?source=${src}&target=${tgt}&level=${lvl}`);
+                                    if (!res.ok) throw new Error();
+                                    const data = await res.json();
+                                    setPhrasesModal({ source: src, target: tgt, level: lvl, blockDescription: b.description, phrases: data.phrases ?? [], loading: false });
+                                  } catch { setPhrasesModal(null); }
+                                }}
+                                onQuiz={() => { void loadQuiz(p.source_lang, p.target_lang, p.level, b.id, b.description); }}
+                              />
                             </div>
                           ))
                         )}
@@ -1516,6 +1560,7 @@ export default function Home() {
                           ? `📚 Learn · Recall new phrase${stage.hadMistakeInRound ? " · ✗ redo round" : ""}`
                           : `📚 Learn · Recall ${roundIndex - 1} of ${roundUnlocked - 1}${stage.hadMistakeInRound ? " · ✗ redo round" : ""}`
                         : stage.mode === "test" ? `📝 Test · Phrase ${doneCount + 1} of ${totalCount}`
+                        : stage.mode === "choice" ? `🔤 Choice · Phrase ${doneCount + 1} of ${totalCount}`
                         : `🔁 Repeat · Phrase ${doneCount + 1} of ${totalCount}`}
                     </span>
                   </div>
@@ -1571,6 +1616,45 @@ export default function Home() {
                   </div>
                 )}
 
+                {stage.mode === "choice" ? (
+                  <div className="mt-auto pt-8">
+                    <div className="eyebrow mb-3">Choose the correct {targetLabel} translation</div>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                      {choiceOptions.map((opt, idx) => {
+                        const isCorrect = opt === currentPhrase.target_text;
+                        const isSelected = choiceState !== "idle" && (
+                          (isCorrect && choiceState === "correct") ||
+                          (!isCorrect && choiceState === "wrong" && choiceOptions[idx] !== currentPhrase.target_text)
+                        );
+                        const highlight = choiceState !== "idle"
+                          ? isCorrect ? "border-good bg-good/10 text-ink" : "border-bad/40 bg-bad/5 text-ink-3"
+                          : "border-rule bg-paper text-ink hover:border-ink-3";
+                        return (
+                          <button
+                            key={idx}
+                            disabled={choiceState !== "idle" || stage.submitting}
+                            onClick={() => {
+                              if (choiceState !== "idle") return;
+                              const correct = opt === currentPhrase.target_text;
+                              setChoiceState(correct ? "correct" : "wrong");
+                              if (!correct) {
+                                setStage(prev => prev.kind === "session"
+                                  ? { ...prev, wrongByPhrase: { ...prev.wrongByPhrase, [currentPhrase.phrase_index]: [...(prev.wrongByPhrase[currentPhrase.phrase_index] ?? []), opt] } }
+                                  : prev);
+                              }
+                              setTimeout(() => { void advancePhrase(currentPhrase); }, 1100);
+                            }}
+                            className={`flex items-center gap-3 border rounded-xl px-4 py-3.5 text-left transition-all ${highlight}`}
+                          >
+                            <span className="font-serif text-[22px] leading-tight flex-1">{opt}</span>
+                            {choiceState !== "idle" && isCorrect && <span className="text-good text-[18px]">✓</span>}
+                            {choiceState !== "idle" && !isCorrect && <span className="text-bad text-[18px]">✗</span>}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                ) : (
                 <form
                   onSubmit={(e) => {
                     e.preventDefault();
@@ -1619,6 +1703,7 @@ export default function Home() {
                     </button>
                   </label>
                 </form>
+                )}
               </>
             ) : (
               <div className="flex-1 grid place-items-center">
@@ -1821,6 +1906,27 @@ export default function Home() {
               <ArrowRight />
             </button>
           </div>
+
+          {Object.keys(stage.wrongByPhrase).length > 0 && (
+            <div className="px-10 lg:px-14 py-8 border-b border-rule">
+              <div className="eyebrow text-bad mb-4">✗ Mistakes this session</div>
+              <div className="space-y-3">
+                {stage.phrases
+                  .filter(p => stage.wrongByPhrase[p.phrase_index]?.length)
+                  .map(p => (
+                    <div key={p.phrase_index} className="bg-paper border border-bad/20 rounded-xl px-4 py-3">
+                      <div className="text-[15px] text-ink-3 mb-0.5">{p.source_text}</div>
+                      <div className="font-serif text-[22px] text-ink">{p.target_text}</div>
+                      <div className="flex flex-wrap gap-1.5 mt-1.5">
+                        {stage.wrongByPhrase[p.phrase_index].map((w, i) => (
+                          <span key={i} className="font-mono text-[14px] text-bad bg-bad/8 rounded px-2 py-0.5 line-through">{w || "(empty)"}</span>
+                        ))}
+                      </div>
+                    </div>
+                  ))}
+              </div>
+            </div>
+          )}
 
           <div className="px-10 lg:px-14 py-9">
             <div className="flex items-baseline justify-between mb-4">
