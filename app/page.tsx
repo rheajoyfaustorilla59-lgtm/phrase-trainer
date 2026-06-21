@@ -1582,15 +1582,21 @@ export default function Home() {
                       <span className="eyebrow text-bad">● {randomItem(MISTAKE_JOKES)}</span>
                     </div>
                     {repeatRecall ? (
-                      /* Recall pass: keep the answer hidden — they must
-                         recall it from memory. Show only the prompt. */
+                      /* Recall pass: keep the answer hidden by default — they
+                         must recall it from memory — but offer a button to peek
+                         if they've truly forgotten the word. */
                       <>
                         <div className="font-serif text-[54px] md:text-[58px] leading-[1.12] tracking-[-0.015em] text-ink mb-3">
                           {currentPhrase.source_text}
                         </div>
-                        <div className="text-[15px] text-ink-3 italic mb-1 select-none">
-                          Still from memory — try again, no answer shown.
+                        <div className="text-[15px] text-ink-3 italic mb-3 select-none">
+                          Try again from memory — or tap below if you forgot it.
                         </div>
+                        <ShowAnswerButton
+                          key={currentPhrase.phrase_index}
+                          targetText={stage.mistake.correct}
+                          targetLangCode={targetLang}
+                        />
                       </>
                     ) : (
                       <>
