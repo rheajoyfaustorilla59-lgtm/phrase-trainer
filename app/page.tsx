@@ -99,6 +99,7 @@ type Stage =
       roundIndex?: number;
       roundUnlocked?: number;
       hadMistakeInRound?: boolean;
+      recall?: boolean;
       choiceSelected?: number | null;
       choiceCorrect?: boolean | null;
     }
@@ -890,6 +891,11 @@ export default function Home() {
           wrongByPhrase: {},
         });
         setInput("");
+      } else if (stage.mode === "repeat" && !stage.recall) {
+        // Cleared the miss on the first pass — now drill the SAME word from
+        // memory (translation hidden) before moving on.
+        setStage({ ...stage, recall: true, mistake: null });
+        setInput("");
       } else {
         await advancePhrase(currentPhrase);
       }
@@ -897,7 +903,14 @@ export default function Home() {
     }
 
     if (normalize(val) === normalize(currentPhrase.target_text)) {
-      await advancePhrase(currentPhrase);
+      if (stage.mode === "repeat" && !stage.recall) {
+        // Got it right with the translation showing — now repeat the same
+        // word from memory (no translation) before advancing to the next.
+        setStage({ ...stage, recall: true, mistake: null });
+        setInput("");
+      } else {
+        await advancePhrase(currentPhrase);
+      }
     } else {
       // Both repeat and test: show the correct answer, require retyping.
       // Hearts only have stakes in Test mode.
@@ -964,7 +977,7 @@ export default function Home() {
           })();
           return { kind: "block-done", block: prev.block, phrases: prev.phrases, words: [], wordCount: 0, wrongByPhrase: prev.wrongByPhrase };
         }
-        return { ...prev, currentN: newCurrentN, submitting: false, mistake: null };
+        return { ...prev, currentN: newCurrentN, submitting: false, mistake: null, recall: false };
       });
       setTimeout(() => inputRef.current?.focus(), 0);
     } catch (e) {
@@ -1491,7 +1504,7 @@ export default function Home() {
       : stage.phrases.find((p) => p.phrase_index > stage.currentN);
     const doneCount = isCumulative ? roundUnlocked - 1 : stage.phrases.filter((p) => p.phrase_index <= stage.currentN).length;
     const totalCount = stage.phrases.length;
-    const hideTranslation = isCumulative && roundIndex > 0;
+    const hideTranslation = (isCumulative && roundIndex > 0) || (stage.mode === "repeat" && !!stage.recall);
 
     return (
       <Page>
@@ -1555,6 +1568,7 @@ export default function Home() {
                           : `📚 Learn · Recall ${roundIndex - 1} of ${roundUnlocked - 1}`
                         : stage.mode === "test" ? `📝 Test · Phrase ${doneCount + 1} of ${totalCount}`
                         : stage.mode === "choice" ? `🔤 Choice · Phrase ${doneCount + 1} of ${totalCount}`
+                        : stage.recall ? `🔁 Repeat · Recall from memory`
                         : `🔁 Repeat · Phrase ${doneCount + 1} of ${totalCount}`}
                     </span>
                   </div>
