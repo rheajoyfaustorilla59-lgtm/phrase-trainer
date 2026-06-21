@@ -839,38 +839,32 @@ export default function Home() {
       if (!currentPhrase) return;
 
       if (stage.mistake) {
+        // Must retype the correct answer to clear the miss.
         if (normalize(val) !== normalize(stage.mistake.correct)) { setInput(""); return; }
-        setStage({ ...stage, roundIndex: roundIndex + 1 <= roundUnlocked ? roundIndex + 1 : 0, mistake: null, hadMistakeInRound: true });
+        // After a miss, drill the SAME phrase from memory (no translation) until it's
+        // produced cleanly. The intro step (0) moves into its recall (1); every recall
+        // step stays put so the word is repeated from memory — never bouncing back to
+        // the translation, never skipping ahead to other words.
+        setStage({ ...stage, roundIndex: roundIndex === 0 ? 1 : roundIndex, mistake: null });
         setInput("");
         return;
       }
 
       if (normalize(val) === normalize(currentPhrase.target_text)) {
         if (roundIndex < roundUnlocked) {
-          // Continue this round
+          // Continue this round (intro → recall → review earlier phrases).
           setStage({ ...stage, roundIndex: roundIndex + 1, mistake: null });
           setInput("");
         } else {
-          // End of round
-          const hadMistake = stage.hadMistakeInRound ?? false;
-          if (!hadMistake && roundUnlocked < stage.phrases.length) {
-            // Unlock next phrase
-            await advancePhrase(currentPhrase);
-          } else if (!hadMistake && roundUnlocked >= stage.phrases.length) {
-            // All phrases mastered!
-            await advancePhrase(currentPhrase);
-          } else {
-            // Had mistakes — restart round, no new phrase
-            setStage({ ...stage, roundIndex: 0, hadMistakeInRound: false, mistake: null });
-            setInput("");
-          }
+          // Every phrase in the round was recalled cleanly from memory —
+          // unlock the next phrase (or finish the block).
+          await advancePhrase(currentPhrase);
         }
       } else {
         const prev = stage.wrongByPhrase[currentPhrase.phrase_index] ?? [];
         setStage({
           ...stage,
           mistake: { correct: currentPhrase.target_text, wrong: val },
-          hadMistakeInRound: true,
           wrongByPhrase: { ...stage.wrongByPhrase, [currentPhrase.phrase_index]: [...prev, val] },
         });
         setInput("");
@@ -1555,10 +1549,10 @@ export default function Home() {
                     <span className="eyebrow">
                       {isCumulative
                         ? roundIndex === 0
-                          ? `📚 Learn · New phrase ${roundUnlocked}${stage.hadMistakeInRound ? " · ✗ redo round" : ""}`
+                          ? `📚 Learn · New phrase ${roundUnlocked}`
                           : roundIndex === 1
-                          ? `📚 Learn · Recall new phrase${stage.hadMistakeInRound ? " · ✗ redo round" : ""}`
-                          : `📚 Learn · Recall ${roundIndex - 1} of ${roundUnlocked - 1}${stage.hadMistakeInRound ? " · ✗ redo round" : ""}`
+                          ? `📚 Learn · Recall new phrase`
+                          : `📚 Learn · Recall ${roundIndex - 1} of ${roundUnlocked - 1}`
                         : stage.mode === "test" ? `📝 Test · Phrase ${doneCount + 1} of ${totalCount}`
                         : stage.mode === "choice" ? `🔤 Choice · Phrase ${doneCount + 1} of ${totalCount}`
                         : `🔁 Repeat · Phrase ${doneCount + 1} of ${totalCount}`}
@@ -1591,14 +1585,15 @@ export default function Home() {
                   </div>
                 ) : (
                   <div className="mt-2">
-                    <div className="eyebrow mb-2">{hideTranslation ? "From memory" : sourceLabel}</div>
-                    {hideTranslation ? (
-                      <div className="font-serif text-[54px] md:text-[58px] leading-[1.12] tracking-[-0.015em] text-ink-3 italic mb-3 select-none">
-                        Recall from memory…
-                      </div>
-                    ) : (
-                      <div className="font-serif text-[54px] md:text-[58px] leading-[1.12] tracking-[-0.015em] text-ink mb-3">
-                        {currentPhrase.source_text}
+                    <div className="eyebrow mb-2">{hideTranslation ? `${sourceLabel} · from memory` : sourceLabel}</div>
+                    {/* Always show the prompt phrase. On recall steps we only hide the
+                        translation/answer so the same word is repeated from memory. */}
+                    <div className="font-serif text-[54px] md:text-[58px] leading-[1.12] tracking-[-0.015em] text-ink mb-3">
+                      {currentPhrase.source_text}
+                    </div>
+                    {hideTranslation && (
+                      <div className="text-[15px] text-ink-3 italic mb-3 select-none">
+                        Type it from memory — no translation this time.
                       </div>
                     )}
                     {!hideTranslation && (
