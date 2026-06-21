@@ -1504,7 +1504,8 @@ export default function Home() {
       : stage.phrases.find((p) => p.phrase_index > stage.currentN);
     const doneCount = isCumulative ? roundUnlocked - 1 : stage.phrases.filter((p) => p.phrase_index <= stage.currentN).length;
     const totalCount = stage.phrases.length;
-    const hideTranslation = (isCumulative && roundIndex > 0) || (stage.mode === "repeat" && !!stage.recall);
+    const repeatRecall = stage.mode === "repeat" && !!stage.recall;
+    const hideTranslation = (isCumulative && roundIndex > 0) || repeatRecall;
 
     return (
       <Page>
@@ -1580,17 +1581,32 @@ export default function Home() {
                     <div className="flex items-center gap-2 mb-2">
                       <span className="eyebrow text-bad">● {randomItem(MISTAKE_JOKES)}</span>
                     </div>
-                    {!hideTranslation && (
-                      <div className="text-[18px] text-ink-3 mb-1">
-                        {currentPhrase.source_text}
-                      </div>
+                    {repeatRecall ? (
+                      /* Recall pass: keep the answer hidden — they must
+                         recall it from memory. Show only the prompt. */
+                      <>
+                        <div className="font-serif text-[54px] md:text-[58px] leading-[1.12] tracking-[-0.015em] text-ink mb-3">
+                          {currentPhrase.source_text}
+                        </div>
+                        <div className="text-[15px] text-ink-3 italic mb-1 select-none">
+                          Still from memory — try again, no answer shown.
+                        </div>
+                      </>
+                    ) : (
+                      <>
+                        {!hideTranslation && (
+                          <div className="text-[18px] text-ink-3 mb-1">
+                            {currentPhrase.source_text}
+                          </div>
+                        )}
+                        <div className="flex items-center gap-3 mb-1">
+                          <div className="font-serif text-[50px] leading-[1.12] tracking-[-0.015em] text-ink">
+                            {stage.mistake.correct}
+                          </div>
+                          <SpeakerButton text={stage.mistake.correct} langCode={targetLang} />
+                        </div>
+                      </>
                     )}
-                    <div className="flex items-center gap-3 mb-1">
-                      <div className="font-serif text-[50px] leading-[1.12] tracking-[-0.015em] text-ink">
-                        {stage.mistake.correct}
-                      </div>
-                      <SpeakerButton text={stage.mistake.correct} langCode={targetLang} />
-                    </div>
                     {(stage.wrongByPhrase[currentPhrase.phrase_index] ?? []).map((w, i) => (
                       <div key={i} className="font-mono text-[18px] text-bad line-through">
                         {w || "(empty)"}
@@ -1673,7 +1689,9 @@ export default function Home() {
                 >
                   <div className="eyebrow mb-2.5">
                     {stage.mistake
-                      ? stage.mode === "test"
+                      ? repeatRecall
+                        ? "Type it from memory to continue"
+                        : stage.mode === "test"
                         ? "Type the correct answer — then restart from phrase 1"
                         : "Type the correct answer to continue"
                       : `Type in ${targetLabel}`}
@@ -1902,8 +1920,13 @@ export default function Home() {
               &rdquo; done.
             </h1>
             <p className="text-[18px] text-ink-2">
-              {stage.phrases.length} phrases learned in this block.
+              ✓ You finished all {stage.phrases.length} phrases in this block.
             </p>
+            {Object.keys(stage.wrongByPhrase).length === 0 && (
+              <p className="text-[18px] text-good font-medium mt-1">
+                Perfect — every answer correct! 🎉
+              </p>
+            )}
             <p className="text-[18px] text-ink-3 mt-3 italic">
               💬 {funnyQuote}
             </p>
