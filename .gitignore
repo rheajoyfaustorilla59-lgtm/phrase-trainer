@@ -12,3 +12,6 @@ nextjs-port/
 nextjs-port */
 .claude/
 .vercel
+
+# TypeScript build cache
+tsconfig.tsbuildinfo
