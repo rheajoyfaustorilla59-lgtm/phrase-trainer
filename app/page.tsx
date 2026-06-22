@@ -2597,11 +2597,15 @@ interface SpeechRecognitionInstance extends EventTarget {
   abort(): void;
   onresult: ((e: SpeechRecognitionEvent) => void) | null;
   onend: (() => void) | null;
-  onerror: (() => void) | null;
+  onerror: ((e: SpeechRecognitionErrorEvent) => void) | null;
 }
 
 interface SpeechRecognitionEvent {
   results: { [index: number]: { [index: number]: { transcript: string } } };
+}
+
+interface SpeechRecognitionErrorEvent {
+  error: string;
 }
 
 function MicButton({ langCode, onResult }: { langCode: string; onResult: (text: string) => void }) {
@@ -2616,10 +2620,18 @@ function MicButton({ langCode, onResult }: { langCode: string; onResult: (text: 
     }
     const SR = window.SpeechRecognition ?? window.webkitSpeechRecognition;
     if (!SR) {
-      alert("Sorry, your browser doesn't support voice input. Try Chrome.");
+      alert(
+        "Voice input isn't supported in this browser. Please open the app in Google Chrome (or Microsoft Edge) on a computer — that's where the mic works best.",
+      );
       return;
     }
-    const rec = new SR();
+    let rec: SpeechRecognitionInstance;
+    try {
+      rec = new SR();
+    } catch {
+      alert("Couldn't start the microphone. Try opening the app in Google Chrome on a computer.");
+      return;
+    }
     rec.lang = LANG_BCP47[langCode] ?? "en-US";
     rec.interimResults = false;
     rec.maxAlternatives = 1;
@@ -2629,10 +2641,36 @@ function MicButton({ langCode, onResult }: { langCode: string; onResult: (text: 
       setListening(false);
     };
     rec.onend = () => setListening(false);
-    rec.onerror = () => setListening(false);
+    rec.onerror = (e) => {
+      setListening(false);
+      switch (e?.error) {
+        case "not-allowed":
+        case "service-not-allowed":
+          alert(
+            "The microphone is blocked. Click the 🔒 (or camera) icon in your browser's address bar, allow the microphone for this site, then try again.",
+          );
+          break;
+        case "audio-capture":
+          alert("No microphone was found. Make sure a mic is connected and not in use by another app.");
+          break;
+        case "network":
+          alert("Voice input needs an internet connection. Check your connection and try again (works best in Google Chrome).");
+          break;
+        case "no-speech":
+          // Benign — nothing was heard. Stay quiet and let the user retry.
+          break;
+        default:
+          if (e?.error) alert("Voice input error: " + e.error);
+      }
+    };
     recRef.current = rec;
     setListening(true);
-    rec.start();
+    try {
+      rec.start();
+    } catch {
+      // start() throws if it's called while a session is already running.
+      setListening(false);
+    }
   }
 
   return (
