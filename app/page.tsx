@@ -1632,6 +1632,15 @@ export default function Home() {
                         Type it from memory — no translation this time.
                       </div>
                     )}
+                    {repeatRecall && (
+                      <div className="mb-1">
+                        <ShowAnswerButton
+                          key={`recall-${currentPhrase.phrase_index}`}
+                          targetText={currentPhrase.target_text}
+                          targetLangCode={targetLang}
+                        />
+                      </div>
+                    )}
                     {!hideTranslation && (
                       <>
                         <div className="flex items-center gap-3 mb-3">
