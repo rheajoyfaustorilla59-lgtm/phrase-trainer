@@ -1624,21 +1624,22 @@ export default function Home() {
                     <div className="eyebrow mb-2">{hideTranslation ? `${sourceLabel} · from memory` : sourceLabel}</div>
                     {/* Always show the prompt phrase. On recall steps we only hide the
                         translation/answer so the same word is repeated from memory. */}
-                    <div className="font-serif text-[54px] md:text-[58px] leading-[1.12] tracking-[-0.015em] text-ink mb-3">
-                      {currentPhrase.source_text}
+                    <div className="flex items-center gap-3 mb-3 flex-wrap">
+                      <div className="font-serif text-[54px] md:text-[58px] leading-[1.12] tracking-[-0.015em] text-ink">
+                        {currentPhrase.source_text}
+                      </div>
+                      {hideTranslation && (
+                        <ShowAnswerButton
+                          key={`recall-${currentPhrase.phrase_index}`}
+                          compact
+                          targetText={currentPhrase.target_text}
+                          targetLangCode={targetLang}
+                        />
+                      )}
                     </div>
                     {hideTranslation && (
                       <div className="text-[15px] text-ink-3 italic mb-3 select-none">
                         Type it from memory — no translation this time.
-                      </div>
-                    )}
-                    {hideTranslation && (
-                      <div className="mb-1">
-                        <ShowAnswerButton
-                          key={`recall-${currentPhrase.phrase_index}`}
-                          targetText={currentPhrase.target_text}
-                          targetLangCode={targetLang}
-                        />
                       </div>
                     )}
                     {!hideTranslation && (
@@ -3092,11 +3093,41 @@ function DailyGoalPill({
 function ShowAnswerButton({
   targetText,
   targetLangCode,
+  compact = false,
 }: {
   targetText: string;
   targetLangCode?: string;
+  compact?: boolean;
 }) {
   const [revealed, setRevealed] = useState(false);
+
+  // Compact: a small pill that sits next to the question. Before tapping it
+  // just says "answer"; once tapped it shows the correct word inline.
+  if (compact) {
+    return (
+      <button
+        type="button"
+        onClick={() => !revealed && setRevealed(true)}
+        title={revealed ? "Correct answer" : "Show the answer"}
+        className={`inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 shrink-0 transition-all ${
+          revealed
+            ? "border-amber/40 bg-amber-soft text-ink cursor-default"
+            : "border-rule bg-paper text-ink-2 hover:border-ink-3 hover:text-ink"
+        }`}
+      >
+        {revealed ? (
+          <>
+            <span className="font-serif text-[20px] leading-tight">{targetText}</span>
+            {targetLangCode && (
+              <SpeakerButton text={targetText} langCode={targetLangCode} size="sm" />
+            )}
+          </>
+        ) : (
+          <span className="text-[15px]">👁 Answer</span>
+        )}
+      </button>
+    );
+  }
 
   if (revealed) {
     return (
