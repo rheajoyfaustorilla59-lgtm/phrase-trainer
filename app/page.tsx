@@ -1632,7 +1632,7 @@ export default function Home() {
                         Type it from memory — no translation this time.
                       </div>
                     )}
-                    {repeatRecall && (
+                    {hideTranslation && (
                       <div className="mb-1">
                         <ShowAnswerButton
                           key={`recall-${currentPhrase.phrase_index}`}
