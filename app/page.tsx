@@ -3101,30 +3101,36 @@ function ShowAnswerButton({
 }) {
   const [revealed, setRevealed] = useState(false);
 
-  // Compact: a small pill that sits next to the question. Before tapping it
-  // just says "answer"; once tapped it shows the correct word inline.
+  // Compact: a small pill that sits next to the question. Tapping toggles the
+  // answer open and closed, so the learner decides when to peek and can hide it
+  // again to keep testing from memory.
   if (compact) {
+    if (revealed) {
+      return (
+        <span className="inline-flex items-center gap-1.5 rounded-full border border-amber/40 bg-amber-soft px-3 py-1.5 shrink-0">
+          <button
+            type="button"
+            onClick={() => setRevealed(false)}
+            title="Hide the answer"
+            className="inline-flex items-center gap-1.5 text-ink"
+          >
+            <span className="font-serif text-[20px] leading-tight">{targetText}</span>
+            <span className="text-[13px] text-ink-3">✕</span>
+          </button>
+          {targetLangCode && (
+            <SpeakerButton text={targetText} langCode={targetLangCode} size="sm" />
+          )}
+        </span>
+      );
+    }
     return (
       <button
         type="button"
-        onClick={() => !revealed && setRevealed(true)}
-        title={revealed ? "Correct answer" : "Show the answer"}
-        className={`inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 shrink-0 transition-all ${
-          revealed
-            ? "border-amber/40 bg-amber-soft text-ink cursor-default"
-            : "border-rule bg-paper text-ink-2 hover:border-ink-3 hover:text-ink"
-        }`}
+        onClick={() => setRevealed(true)}
+        title="Show the answer"
+        className="inline-flex items-center gap-1.5 rounded-full border border-rule bg-paper px-3 py-1.5 shrink-0 text-ink-2 hover:border-ink-3 hover:text-ink transition-all"
       >
-        {revealed ? (
-          <>
-            <span className="font-serif text-[20px] leading-tight">{targetText}</span>
-            {targetLangCode && (
-              <SpeakerButton text={targetText} langCode={targetLangCode} size="sm" />
-            )}
-          </>
-        ) : (
-          <span className="text-[15px]">👁 Answer</span>
-        )}
+        <span className="text-[15px]">👁 Answer</span>
       </button>
     );
   }
